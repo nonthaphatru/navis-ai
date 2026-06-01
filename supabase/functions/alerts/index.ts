@@ -35,19 +35,69 @@ const SEC_USER_AGENT = `NavisAI/1.0 (${SEC_CONTACT_EMAIL})`;
 // ── Tickers ──────────────────────────────────────────────────────────────────
 // Keep roughly in sync with WATCHED_TICKERS in analyze-stocks/index.ts.
 
+// DEFAULTS — overwritten at runtime from the `watchlist` / `app_settings` tables
+// (managed in the web UI). Used as-is when those tables are empty.
+
 // Your actual holdings — smaller move threshold + SEC monitoring.
-const HOLDINGS = ["SOFI", "PLTR"];
+const DEFAULT_HOLDINGS = ["SOFI", "PLTR"];
 
 // Broader watchlist — only alerted on bigger moves.
-const WATCHLIST = [
+const DEFAULT_WATCHLIST = [
   "NVDA", "GOOGL", "TSLA", "AAPL", "MSFT", "META", "AMZN", "AMD", "AVGO", "CRM",
   "HOOD", "ZS", "SOUN", "AI", "BBAI", "IONQ",
 ];
 
-// ── Thresholds ─────────────────────────────────────────────────────────────────
+// Mutable — populated by loadConfig() at the start of each run.
+let HOLDINGS: string[] = [...DEFAULT_HOLDINGS];
+let WATCHLIST: string[] = [...DEFAULT_WATCHLIST];
 
-const HOLDING_MOVE_PCT = 4;  // alert when a holding moves >= this % intraday
-const WATCH_MOVE_PCT = 7;    // alert when a watchlist name moves >= this %
+// ── Thresholds (defaults; overridden by app_settings) ───────────────────────────
+
+let HOLDING_MOVE_PCT = 4;  // alert when a holding moves >= this % intraday
+let WATCH_MOVE_PCT = 7;    // alert when a watchlist name moves >= this %
+let SEC_ALERTS_ENABLED = true;
+let EARNINGS_ALERTS_ENABLED = true;
+
+/**
+ * Load holdings/watchlist from `watchlist` and thresholds/toggles from
+ * `app_settings`. Falls back to the hardcoded defaults when tables are empty.
+ */
+async function loadConfig(supabase: any): Promise<void> {
+  try {
+    const { data: wl } = await supabase
+      .from("watchlist")
+      .select("symbol, is_holding")
+      .eq("asset_type", "stock")
+      .order("sort_order", { ascending: true });
+    if (wl && wl.length > 0) {
+      const syms = wl.map((r: any) => ({ s: String(r.symbol).toUpperCase(), h: !!r.is_holding }));
+      HOLDINGS = syms.filter((x) => x.h).map((x) => x.s);
+      WATCHLIST = syms.filter((x) => !x.h).map((x) => x.s);
+      if (HOLDINGS.length === 0) { HOLDINGS = WATCHLIST.slice(0, 2); WATCHLIST = WATCHLIST.slice(2); }
+      console.log(`📋 watchlist: ${HOLDINGS.length} holdings, ${WATCHLIST.length} watch`);
+    } else {
+      console.log("📋 watchlist empty — using defaults");
+    }
+  } catch (err) {
+    console.error("loadConfig watchlist failed:", err);
+  }
+  try {
+    const { data: s } = await supabase
+      .from("app_settings")
+      .select("holding_move_pct, watch_move_pct, sec_alerts_enabled, earnings_alerts_enabled")
+      .limit(1)
+      .maybeSingle();
+    if (s) {
+      if (typeof s.holding_move_pct === "number") HOLDING_MOVE_PCT = s.holding_move_pct;
+      if (typeof s.watch_move_pct === "number") WATCH_MOVE_PCT = s.watch_move_pct;
+      if (typeof s.sec_alerts_enabled === "boolean") SEC_ALERTS_ENABLED = s.sec_alerts_enabled;
+      if (typeof s.earnings_alerts_enabled === "boolean") EARNINGS_ALERTS_ENABLED = s.earnings_alerts_enabled;
+      console.log(`⚙️ settings: hold>=${HOLDING_MOVE_PCT}% watch>=${WATCH_MOVE_PCT}% sec=${SEC_ALERTS_ENABLED} earn=${EARNINGS_ALERTS_ENABLED}`);
+    }
+  } catch (err) {
+    console.error("loadConfig settings failed:", err);
+  }
+}
 
 const SEC_FORMS = ["8-K", "10-Q", "10-K", "4"];
 const SEC_FORM_LABEL: Record<string, string> = {
@@ -364,11 +414,14 @@ Deno.serve(async (req: Request) => {
       return json({ status: "ok", mode });
     }
 
-    // Run all three checks independently — one failing source can't kill the rest.
+    // Load watchlist + thresholds/toggles from the DB (web-UI managed).
+    await loadConfig(supabase);
+
+    // Run the enabled checks independently — one failing source can't kill the rest.
     const [priceR, secR, earnR] = await Promise.allSettled([
       checkPriceMoves(supabase),
-      checkSecFilings(supabase),
-      checkEarnings(supabase),
+      SEC_ALERTS_ENABLED ? checkSecFilings(supabase) : Promise.resolve([]),
+      EARNINGS_ALERTS_ENABLED ? checkEarnings(supabase) : Promise.resolve([]),
     ]);
 
     const priceLines = priceR.status === "fulfilled" ? priceR.value : [];

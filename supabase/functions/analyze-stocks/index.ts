@@ -24,12 +24,15 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "
 const TRIGGER_SECRET = Deno.env.get("TRIGGER_SECRET") ?? "";
 
 // ── Portfolio & Watchlist ───────────────────────────────────────────────────────
+// These are DEFAULTS. At runtime they're overwritten by the `watchlist` table
+// (managed from the web UI). If the table is empty, these defaults are used so
+// nothing breaks before the user seeds their watchlist.
 
 // 🔴 TOP PRIORITY — Largest positions
-const PRIORITY_TICKERS = ["SOFI", "PLTR"];
+const DEFAULT_PRIORITY_TICKERS = ["SOFI", "PLTR"];
 
 // Core watchlist — fetched via Finnhub company news (rotated each run)
-const WATCHED_TICKERS = [
+const DEFAULT_WATCHED_TICKERS = [
   // Priority holdings (always fetched first)
   "SOFI", "PLTR",
   // AI & Tech majors
@@ -41,6 +44,36 @@ const WATCHED_TICKERS = [
   // AI mid/small caps
   "SOUN", "AI", "BBAI", "IONQ",
 ];
+
+// Mutable — populated from the DB at the start of each run (see loadWatchlist).
+let PRIORITY_TICKERS: string[] = [...DEFAULT_PRIORITY_TICKERS];
+let WATCHED_TICKERS: string[] = [...DEFAULT_WATCHED_TICKERS];
+
+/**
+ * Load the watchlist from the DB. Falls back to the hardcoded defaults when the
+ * table is empty (e.g. before the user has set anything in the web UI).
+ */
+async function loadWatchlist(supabase: any): Promise<void> {
+  try {
+    const { data, error } = await supabase
+      .from("watchlist")
+      .select("symbol, is_holding, priority")
+      .eq("asset_type", "stock")
+      .order("sort_order", { ascending: true });
+    if (error || !data || data.length === 0) {
+      console.log("📋 watchlist table empty/unavailable — using defaults");
+      return;
+    }
+    WATCHED_TICKERS = data.map((r: any) => String(r.symbol).toUpperCase());
+    PRIORITY_TICKERS = data
+      .filter((r: any) => r.is_holding || r.priority)
+      .map((r: any) => String(r.symbol).toUpperCase());
+    if (PRIORITY_TICKERS.length === 0) PRIORITY_TICKERS = WATCHED_TICKERS.slice(0, 2);
+    console.log(`📋 Loaded ${WATCHED_TICKERS.length} tickers from watchlist (${PRIORITY_TICKERS.length} priority)`);
+  } catch (err) {
+    console.error("loadWatchlist failed, using defaults:", err);
+  }
+}
 
 // Google News RSS search queries (filtered to last 24h via 'when:1d')
 const RSS_QUERIES = [
@@ -502,9 +535,13 @@ async function analyzeWithAI(
   // Separate priority articles for emphasis
   const priorityArticles = articles.filter((a) => a.isPriority || PRIORITY_TICKERS.includes(a.relatedTicker || ""));
 
+  // Build the portfolio/watch line from the live watchlist (DB-driven).
+  const watchOnly = WATCHED_TICKERS.filter((t) => !PRIORITY_TICKERS.includes(t));
+  const portfolioLine = `PORTFOLIO: ${PRIORITY_TICKERS.join(", ") || "(none)"} | Watch: ${watchOnly.join(", ") || "(none)"}`;
+
   const prompt = `You are a financial news analyst. Analyze ALL these articles and create a mobile-friendly summary optimized for Apple Watch + iPhone.
 
-PORTFOLIO: SOFI (largest), PLTR | Watch: NVDA, GOOGL, TSLA, AAPL, ZS, MSFT, META, AMD, AVGO, CRM, HOOD, SOUN, AI, BBAI, IONQ
+${portfolioLine}
 INTERESTS: Trump, war/geopolitics, S&P 500, AI/tech, GOLD price
 
 ⚠️ CRITICAL FORMAT RULE: The HEADLINE section MUST come FIRST because Apple Watch truncates text. Put the most important info at the very top.
@@ -732,6 +769,9 @@ Deno.serve(async (req: Request) => {
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
   try {
+    // ── Step 0: Load the watchlist from the DB (web-UI managed) ──
+    await loadWatchlist(supabase);
+
     // ── Step 1: Fetch news from all sources in parallel ──
     console.log("📰 Fetching news from Finnhub, Google News, MarketWatch, CNBC, Yahoo Finance...");
     const [generalNews, companyNews, googleRss, directRss] = await Promise.all([

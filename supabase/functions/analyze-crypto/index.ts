@@ -15,12 +15,45 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "
 const TRIGGER_SECRET = Deno.env.get("TRIGGER_SECRET") ?? "";
 
 // ── Crypto Watchlist ───────────────────────────────────────────────────────────
+// DEFAULTS — overwritten at runtime from the `watchlist` table (asset_type='crypto').
 
-const CRYPTO_IDS = ["bitcoin", "ethereum"]; // CoinGecko IDs
-const CRYPTO_SYMBOLS: Record<string, string> = {
+const DEFAULT_CRYPTO_IDS = ["bitcoin", "ethereum"]; // CoinGecko IDs
+const DEFAULT_CRYPTO_SYMBOLS: Record<string, string> = {
   bitcoin: "BTC",
   ethereum: "ETH",
 };
+
+// Mutable — populated by loadCryptoWatchlist() at the start of each run.
+let CRYPTO_IDS: string[] = [...DEFAULT_CRYPTO_IDS];
+let CRYPTO_SYMBOLS: Record<string, string> = { ...DEFAULT_CRYPTO_SYMBOLS };
+
+/**
+ * Load tracked coins from the `watchlist` table (crypto rows). Each row needs a
+ * coingecko_id (for pricing) and symbol (for display). Falls back to defaults
+ * when the table has no crypto rows.
+ */
+async function loadCryptoWatchlist(supabase: any): Promise<void> {
+  try {
+    const { data } = await supabase
+      .from("watchlist")
+      .select("symbol, coingecko_id")
+      .eq("asset_type", "crypto")
+      .order("sort_order", { ascending: true });
+    const rows = (data || []).filter((r: any) => r.coingecko_id);
+    if (rows.length === 0) {
+      console.log("🪙 no crypto watchlist rows — using defaults (BTC, ETH)");
+      return;
+    }
+    CRYPTO_IDS = rows.map((r: any) => String(r.coingecko_id).toLowerCase());
+    CRYPTO_SYMBOLS = {};
+    for (const r of rows) {
+      CRYPTO_SYMBOLS[String(r.coingecko_id).toLowerCase()] = String(r.symbol).toUpperCase();
+    }
+    console.log(`🪙 Loaded ${CRYPTO_IDS.length} coins from watchlist: ${CRYPTO_IDS.join(", ")}`);
+  } catch (err) {
+    console.error("loadCryptoWatchlist failed, using defaults:", err);
+  }
+}
 
 // RSS queries for crypto news
 const CRYPTO_RSS_QUERIES = [
@@ -522,6 +555,9 @@ Deno.serve(async (req: Request) => {
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
   try {
+    // ── Step 0: Load tracked coins from the DB (web-UI managed) ──
+    await loadCryptoWatchlist(supabase);
+
     // ── Step 1: Fetch data in parallel ──
     console.log("📡 Fetching crypto prices, news...");
     const [prices, global, googleNews, rssNews] = await Promise.all([
