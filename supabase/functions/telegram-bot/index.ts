@@ -103,7 +103,7 @@ const IGNORE_WORDS = new Set([
   "ABOUT", "WOULD", "THINK", "STOCK", "TODAY", "GOING", "TELL",
 ]);
 
-// Popular company name → ticker map (instant, no API call)
+// Popular company name → ticker map (instant, no API call) a
 const COMPANY_TO_TICKER: Record<string, string> = {
   "apple": "AAPL", "google": "GOOGL", "alphabet": "GOOGL", "amazon": "AMZN",
   "microsoft": "MSFT", "meta": "META", "facebook": "META", "tesla": "TSLA",
@@ -318,7 +318,7 @@ Deno.serve(async (req: Request) => {
 
     // Handle /start command
     if (userText === "/start") {
-      await sendReply(chatId, 
+      await sendReply(chatId,
         "🚀 Navis AI Stock Bot\n\n" +
         "Ask me anything about your portfolio or the market!\n\n" +
         "Examples:\n" +
