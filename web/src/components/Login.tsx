@@ -20,8 +20,18 @@ export function Login() {
       options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
     });
     setBusy(false);
-    if (error) setErr("That email isn't authorized for this app.");
-    else setSent(true);
+    if (error) {
+      const m = (error.message || "").toLowerCase();
+      if (m.includes("rate limit") || (error as any).status === 429) {
+        setErr("Too many requests. The free email service allows only ~2 links/hour — wait a bit, then request one link (and check your inbox/spam for an earlier one).");
+      } else if (m.includes("signups not allowed") || m.includes("otp_disabled")) {
+        setErr("That email isn't authorized for this app.");
+      } else {
+        setErr(error.message || "Couldn't send the magic link. Try again shortly.");
+      }
+    } else {
+      setSent(true);
+    }
   }
 
   return (
