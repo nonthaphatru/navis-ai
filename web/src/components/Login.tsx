@@ -3,35 +3,25 @@ import { supabase } from "../lib/supabase";
 
 export function Login() {
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
+  const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function sendLink(e: React.FormEvent) {
+  async function signIn(e: React.FormEvent) {
     e.preventDefault();
     setErr("");
     setBusy(true);
-    // Redirect back to this app's base URL (must be allow-listed in Supabase Auth).
-    const redirectTo = window.location.origin + import.meta.env.BASE_URL;
-    // shouldCreateUser:false -> only pre-approved accounts can sign in. Combined
-    // with sign-ups being disabled server-side, unknown emails are rejected.
-    const { error } = await supabase.auth.signInWithOtp({
+    const { error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
-      options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
+      password,
     });
     setBusy(false);
     if (error) {
       const m = (error.message || "").toLowerCase();
-      if (m.includes("rate limit") || (error as any).status === 429) {
-        setErr("Too many requests. The free email service allows only ~2 links/hour — wait a bit, then request one link (and check your inbox/spam for an earlier one).");
-      } else if (m.includes("signups not allowed") || m.includes("otp_disabled")) {
-        setErr("That email isn't authorized for this app.");
-      } else {
-        setErr(error.message || "Couldn't send the magic link. Try again shortly.");
-      }
-    } else {
-      setSent(true);
+      if (m.includes("invalid login")) setErr("Wrong email or password.");
+      else setErr(error.message || "Could not sign in.");
     }
+    // On success, the auth listener in App.tsx swaps to the dashboard.
   }
 
   return (
@@ -40,31 +30,35 @@ export function Login() {
         <div className="brand" style={{ fontSize: 26, fontWeight: 800, marginBottom: 6 }}>
           Navis AI
         </div>
-        <p className="sub" style={{ marginBottom: 20 }}>
-          Your private market dashboard
-        </p>
-        {sent ? (
-          <p className="ok">
-            ✅ Check your email — tap the magic link to sign in. You can close this tab.
-          </p>
-        ) : (
-          <form onSubmit={sendLink}>
-            <div className="field">
-              <label>Email</label>
-              <input
-                type="email"
-                required
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </div>
-            {err && <p className="error" style={{ marginBottom: 10 }}>{err}</p>}
-            <button className="btn btn-accent" style={{ width: "100%" }} disabled={busy}>
-              {busy ? "Sending…" : "Send magic link"}
-            </button>
-          </form>
-        )}
+        <p className="sub" style={{ marginBottom: 20 }}>Your private market dashboard</p>
+        <form onSubmit={signIn}>
+          <div className="field">
+            <label>Email</label>
+            <input
+              type="email"
+              required
+              autoComplete="username"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label>Password</label>
+            <input
+              type="password"
+              required
+              autoComplete="current-password"
+              placeholder="Your password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+          {err && <p className="error" style={{ marginBottom: 10 }}>{err}</p>}
+          <button className="btn btn-accent" style={{ width: "100%" }} disabled={busy}>
+            {busy ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
       </div>
     </div>
   );
