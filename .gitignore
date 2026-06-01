@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Supabase local
+.supabase/
+supabase/.temp/
+
+# Environment / Secrets
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Gemini / AI
+.gemini/
