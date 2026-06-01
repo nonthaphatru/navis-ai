@@ -103,7 +103,7 @@ const IGNORE_WORDS = new Set([
   "ABOUT", "WOULD", "THINK", "STOCK", "TODAY", "GOING", "TELL",
 ]);
 
-// Popular company name → ticker map (instant, no API call) a
+// Popular company name → ticker map (instant, no API call) test
 const COMPANY_TO_TICKER: Record<string, string> = {
   "apple": "AAPL", "google": "GOOGL", "alphabet": "GOOGL", "amazon": "AMZN",
   "microsoft": "MSFT", "meta": "META", "facebook": "META", "tesla": "TSLA",
