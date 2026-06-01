@@ -8,7 +8,9 @@ const SUPABASE_ANON_KEY =
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
-    flowType: "pkce",
+    // implicit (not pkce) so a magic link opened on a different device/browser
+    // than where it was requested still logs in.
+    flowType: "implicit",
     detectSessionInUrl: true,
     persistSession: true,
     autoRefreshToken: true,
