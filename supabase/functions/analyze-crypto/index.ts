@@ -11,6 +11,9 @@ const CRYPTO_TELEGRAM_CHAT_ID = Deno.env.get("CRYPTO_TELEGRAM_CHAT_ID") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
+// Optional: if set, callers must send header `x-navis-secret: <value>`.
+const TRIGGER_SECRET = Deno.env.get("TRIGGER_SECRET") ?? "";
+
 // ── Crypto Watchlist ───────────────────────────────────────────────────────────
 
 const CRYPTO_IDS = ["bitcoin", "ethereum"]; // CoinGecko IDs
@@ -491,9 +494,14 @@ async function sendTelegram(
 
 // ── Main Handler ───────────────────────────────────────────────────────────────
 
-Deno.serve(async (_req: Request) => {
+Deno.serve(async (req: Request) => {
   const startTime = Date.now();
   console.log("🪙 Crypto analysis pipeline started");
+
+  // Optional shared-secret gate (locks down the public trigger URL).
+  if (TRIGGER_SECRET && req.headers.get("x-navis-secret") !== TRIGGER_SECRET) {
+    return new Response("Forbidden", { status: 403 });
+  }
 
   // Validate config
   const missingKeys = [];
@@ -588,6 +596,24 @@ Deno.serve(async (_req: Request) => {
     );
   } catch (err) {
     console.error("💥 Pipeline error:", err);
+
+    // Log the error so the heartbeat / history shows it.
+    try {
+      await supabase.from("crypto_analysis_log").insert({
+        error: String(err),
+        notification_sent: false,
+      });
+    } catch (_) {
+      // Ignore logging errors
+    }
+
+    // Alert me on Telegram so a silent failure doesn't go unnoticed.
+    try {
+      await sendTelegram(`⚠️ Navis CRYPTO pipeline error:\n${String(err).slice(0, 300)}`, "HIGH", 0);
+    } catch (_) {
+      // Ignore alert failures
+    }
+
     return new Response(
       JSON.stringify({ error: String(err) }),
       { status: 500, headers: { "Content-Type": "application/json" } }

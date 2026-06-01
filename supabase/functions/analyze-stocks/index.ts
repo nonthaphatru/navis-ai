@@ -20,6 +20,9 @@ const TELEGRAM_CHAT_ID = Deno.env.get("TELEGRAM_CHAT_ID") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
+// Optional: if set, callers must send header `x-navis-secret: <value>`.
+const TRIGGER_SECRET = Deno.env.get("TRIGGER_SECRET") ?? "";
+
 // ── Portfolio & Watchlist ───────────────────────────────────────────────────────
 
 // 🔴 TOP PRIORITY — Largest positions
@@ -703,6 +706,11 @@ Deno.serve(async (req: Request) => {
   const startTime = Date.now();
   console.log("🚀 Stock analysis pipeline started");
 
+  // Optional shared-secret gate (locks down the public trigger URL).
+  if (TRIGGER_SECRET && req.headers.get("x-navis-secret") !== TRIGGER_SECRET) {
+    return new Response("Forbidden", { status: 403 });
+  }
+
   // Validate configuration
   const missingKeys = [];
   if (!FINNHUB_API_KEY) missingKeys.push("FINNHUB_API_KEY");
@@ -829,6 +837,13 @@ Deno.serve(async (req: Request) => {
       });
     } catch (_) {
       // Ignore logging errors
+    }
+
+    // Alert me on Telegram so a silent failure doesn't go unnoticed.
+    try {
+      await sendTelegram(`⚠️ Navis STOCK pipeline error:\n${String(err).slice(0, 300)}`, "HIGH", 0);
+    } catch (_) {
+      // Ignore alert failures
     }
 
     return new Response(

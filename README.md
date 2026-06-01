@@ -9,8 +9,9 @@ Automated pipeline that analyzes US stock market + Trump-related news every 30 m
 | Runtime | Supabase Edge Functions (Deno) | Free |
 | Scheduler | pg_cron + pg_net | Free |
 | News Data | Finnhub API + Google News RSS | Free |
+| Event Alerts | Finnhub quotes + SEC EDGAR filings | Free |
 | AI Analysis | Google Gemini 2.0 Flash | Free |
-| Notifications | ntfy.sh → iPhone + Apple Watch | Free |
+| Notifications | ntfy.sh / Telegram → iPhone + Apple Watch | Free |
 
 ## Prerequisites
 
@@ -109,6 +110,66 @@ Tech ↑, Semiconductors ↑, EVs ↓, Energy ↑
 AI infrastructure spending continues to drive tech, but auto sector 
 faces headwinds from weaker consumer demand.
 ```
+
+## Event Alerts (price moves, SEC filings, earnings)
+
+Separate from the 30-minute news digest, the `alerts` function pings you **only
+when something actionable happens** — so it's signal, not noise:
+
+- **📉 Price moves** — a holding (SOFI/PLTR) moves ≥4% intraday, or a watchlist
+  name moves ≥7%. (Thresholds are editable at the top of `alerts/index.ts`.)
+- **🏛️ SEC filings** — a new 8-K / 10-Q / 10-K / Form 4 is filed for your
+  holdings (via the free SEC EDGAR API — no key needed).
+- **📅 Earnings** — a reminder when a watched ticker reports in the next 2 days.
+- **✅ Daily heartbeat** — one message a day confirming both the stock and crypto
+  pipelines are still running (so a silent failure can't go unnoticed).
+
+It also sends a **Telegram alert if any pipeline crashes**.
+
+### Deploy the alerts + crypto setup
+
+```bash
+# 1. Run the new migration (Dashboard → SQL Editor) — creates crypto + alert
+#    tables and schedules the crypto/alerts/heartbeat cron jobs.
+#    ⚠️ Replace the project ref + service role key placeholders first.
+supabase/migrations/003_crypto_and_alerts.sql
+
+# 2. Deploy the new + crypto functions
+supabase functions deploy alerts --no-verify-jwt
+supabase functions deploy analyze-crypto --no-verify-jwt
+
+# 3. (Optional) Tell SEC who's calling — used in the EDGAR User-Agent
+supabase secrets set SEC_CONTACT_EMAIL=you@example.com
+
+# 4. Test
+curl -X POST https://YOUR_PROJECT_REF.supabase.co/functions/v1/alerts \
+  -H "Authorization: Bearer YOUR_ANON_KEY"
+curl -X POST "https://YOUR_PROJECT_REF.supabase.co/functions/v1/alerts?mode=heartbeat" \
+  -H "Authorization: Bearer YOUR_ANON_KEY"
+```
+
+> The crypto pipeline (`analyze-crypto`) uses its own Telegram bot — set
+> `CRYPTO_TELEGRAM_BOT_TOKEN` and `CRYPTO_TELEGRAM_CHAT_ID` as secrets if you
+> want crypto alerts on a separate channel.
+
+### (Optional) Lock down the trigger URLs
+
+By default the functions are deployed with `--no-verify-jwt`, so anyone with the
+URL could trigger them. To require a shared secret:
+
+```bash
+supabase secrets set TRIGGER_SECRET=some-long-random-string
+```
+
+Then add this header to **each** cron job (re-run `cron.schedule` with the same
+job name to overwrite), alongside the existing `Authorization` header:
+
+```sql
+'x-navis-secret', 'some-long-random-string'
+```
+
+If `TRIGGER_SECRET` is **not** set, the check is skipped and nothing changes —
+so it's safe to deploy first and lock down later.
 
 ## Customization
 
