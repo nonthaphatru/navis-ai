@@ -54,7 +54,7 @@ export function Dashboard() {
     <div>
       <h2 className="page-title">Dashboard</h2>
 
-      {total && (
+      {/* {total && (
         <div className="glass card">
           <div className="section-label">Portfolio value</div>
           <div className="row between">
@@ -64,7 +64,7 @@ export function Dashboard() {
             </span>
           </div>
         </div>
-      )}
+      )} */}
 
       <div className="glass card" style={{ marginTop: 14 }}>
         <div className="row between" style={{ marginBottom: 8 }}>
