@@ -13,12 +13,14 @@ export function Login() {
     setBusy(true);
     // Redirect back to this app's base URL (must be allow-listed in Supabase Auth).
     const redirectTo = window.location.origin + import.meta.env.BASE_URL;
+    // shouldCreateUser:false -> only pre-approved accounts can sign in. Combined
+    // with sign-ups being disabled server-side, unknown emails are rejected.
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
-      options: { emailRedirectTo: redirectTo },
+      options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
     });
     setBusy(false);
-    if (error) setErr(error.message);
+    if (error) setErr("That email isn't authorized for this app.");
     else setSent(true);
   }
 
