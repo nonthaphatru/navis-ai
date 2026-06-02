@@ -44,6 +44,7 @@ export interface PositionSummary {
   avgCost: number;
   totalCost: number;
   realizedPL: number;
+  totalFees: number;
   trades: TradeRow[];
   firstTrade: string;
   lastTrade: string;

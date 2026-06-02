@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { fetchQuotes } from "../lib/quotes";
-import { buildPositions } from "../lib/portfolio";
+import { buildPositions, calcTradeFee } from "../lib/portfolio";
 import { CRYPTO_OPTIONS } from "../lib/cryptoList";
 import type { TradeRow, PositionSummary, AssetType, TradeSide, Quote } from "../types";
 
@@ -226,8 +226,9 @@ export function Portfolio() {
   });
 
   // ── Totals ──
-  let mktTotal = 0, costTotal = 0, realizedTotal = 0;
+  let mktTotal = 0, costTotal = 0, realizedTotal = 0, feesTotal = 0;
   for (const p of positions) {
+    feesTotal += p.totalFees;
     if (p.totalShares <= 0) {
       realizedTotal += p.realizedPL;
       continue;
@@ -274,6 +275,10 @@ export function Portfolio() {
           <span className={`sub mono ${realizedTotal >= 0 ? "pos" : "neg"}`}>
             Realized {realizedTotal >= 0 ? "+" : ""}{c(realizedTotal)}
           </span>
+        </div>
+        <div className="row between" style={{ marginTop: 4 }}>
+          <span className="sub">Fees paid <span className="dim">(Webull TH)</span></span>
+          <span className="sub mono neg">{c(feesTotal)}</span>
         </div>
         {currency === "THB" && thbRate && (
           <div className="sub" style={{ marginTop: 6 }}>Rate: 1 USD = {thbRate.toFixed(2)} THB</div>
@@ -442,12 +447,17 @@ export function Portfolio() {
                 <div className={`chevron ${isExpanded ? "open" : ""}`}>▼</div>
               </div>
 
-              {/* ── Realized P/L (for open positions) ── */}
+              {/* ── Realized P/L + Fees ── */}
               {isOpen && pos.realizedPL !== 0 && (
                 <div className="sub" style={{ marginTop: 4 }}>
                   Realized P/L: <span className={`mono ${pos.realizedPL >= 0 ? "pos" : "neg"}`}>
                     {pos.realizedPL >= 0 ? "+" : ""}{c(pos.realizedPL)}
                   </span>
+                </div>
+              )}
+              {pos.totalFees > 0 && (
+                <div className="sub" style={{ marginTop: 2 }}>
+                  Fees: <span className="mono dim">{c(pos.totalFees)}</span>
                 </div>
               )}
 
@@ -457,6 +467,9 @@ export function Portfolio() {
                   <div className="row between" style={{ marginBottom: 8 }}>
                     <span className="section-label" style={{ margin: 0 }}>
                       {pos.trades.length} trade{pos.trades.length !== 1 ? "s" : ""}
+                      <span className="dim" style={{ marginLeft: 8, fontSize: 11, textTransform: "none" }}>
+                        fees: {c(pos.totalFees)}
+                      </span>
                     </span>
                     <button
                       className="btn btn-sm btn-accent"
@@ -466,11 +479,12 @@ export function Portfolio() {
 
                   {pos.trades.map((t) => (
                     <div key={t.id} className="trade-row">
-                      <div className="row" style={{ gap: 8, flex: 1 }}>
+                      <div className="row" style={{ gap: 8, flex: 1, flexWrap: "wrap" }}>
                         <span className="trade-date">{fmtDate(t.traded_at)}</span>
                         <span className={`trade-side ${t.side}`}>{t.side.toUpperCase()}</span>
                         <span className="mono">{t.quantity} @ {c(t.price)}</span>
                         <span className="dim mono">{c(t.quantity * t.price)}</span>
+                        <span className="fee-badge" title="Webull TH fee">💸 {c(calcTradeFee(t.side, t.quantity, t.price))}</span>
                       </div>
                       <div className="row" style={{ gap: 4 }}>
                         {t.note && <span className="dim" title={t.note}>📝</span>}

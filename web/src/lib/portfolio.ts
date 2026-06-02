@@ -1,13 +1,53 @@
 import type { TradeRow, PositionSummary } from "../types";
 
 /**
+ * Webull Thailand fee structure for US stocks.
+ * Source: webull.co.th/pricing
+ *
+ * ── BUY & SELL ──
+ *   Commission:       0.10% of trade value
+ *   VAT on commission: 7% of commission
+ *
+ * ── SELL ONLY (US regulatory pass-through) ──
+ *   SEC Fee:    0.0000278 × trade value  (min $0.01)
+ *   FINRA TAF:  0.000195 × shares        (min $0.01, max $9.79)
+ *   FINRA CAT:  0.000024 × shares
+ */
+
+const COMMISSION_RATE = 0.001;         // 0.10%
+const VAT_RATE = 0.07;                 // 7% on commission
+const SEC_FEE_RATE = 0.0000278;        // per $ of sell value
+const FINRA_TAF_PER_SHARE = 0.000195;  // per share sold
+const FINRA_TAF_MAX = 9.79;
+const FINRA_CAT_PER_SHARE = 0.000024;  // per share sold
+
+/** Calculate Webull Thailand fees for a single trade */
+export function calcTradeFee(side: "buy" | "sell", quantity: number, price: number): number {
+  const tradeValue = quantity * price;
+
+  // Commission + VAT (both buy and sell)
+  const commission = tradeValue * COMMISSION_RATE;
+  const vat = commission * VAT_RATE;
+  let total = commission + vat;
+
+  // Sell-only regulatory fees
+  if (side === "sell") {
+    const secFee = Math.max(0.01, tradeValue * SEC_FEE_RATE);
+    const finraTaf = Math.min(FINRA_TAF_MAX, Math.max(0.01, quantity * FINRA_TAF_PER_SHARE));
+    const finraCat = quantity * FINRA_CAT_PER_SHARE;
+    total += secFee + finraTaf + finraCat;
+  }
+
+  return total;
+}
+
+/**
  * Calculate position summary from trade history using Weighted Average Cost.
- * This is the same method used by Webull, Robinhood, etc.
+ * Includes Webull Thailand commission fees in P/L calculation.
  *
  * How it works:
- * - Each BUY adds to the cost pool: totalCost += qty * price
- * - Each SELL uses the current average: realizedPL += qty * (sellPrice - avgCost)
- *   and reduces the cost pool proportionally.
+ * - Each BUY adds to the cost pool: totalCost += qty * price + fees
+ * - Each SELL uses the current average: realizedPL += qty * (sellPrice - avgCost) - fees
  */
 export function calculatePosition(trades: TradeRow[]): Omit<PositionSummary, "symbol" | "asset_type" | "coingecko_id" | "trades" | "firstTrade" | "lastTrade"> {
   const sorted = [...trades].sort(
@@ -17,15 +57,21 @@ export function calculatePosition(trades: TradeRow[]): Omit<PositionSummary, "sy
   let totalShares = 0;
   let totalCost = 0;
   let realizedPL = 0;
+  let totalFees = 0;
 
   for (const t of sorted) {
+    const fee = calcTradeFee(t.side, t.quantity, t.price);
+    totalFees += fee;
+
     if (t.side === "buy") {
-      totalCost += t.quantity * t.price;
+      // Include buy fees in cost basis (raises avg cost)
+      totalCost += t.quantity * t.price + fee;
       totalShares += t.quantity;
     } else {
-      // Sell at current weighted average
+      // Sell: P/L = proceeds - cost - sell fees
       const avgCost = totalShares > 0 ? totalCost / totalShares : 0;
-      realizedPL += t.quantity * (t.price - avgCost);
+      const proceeds = t.quantity * t.price - fee;
+      realizedPL += proceeds - (t.quantity * avgCost);
       totalCost -= t.quantity * avgCost;
       totalShares -= t.quantity;
     }
@@ -39,7 +85,7 @@ export function calculatePosition(trades: TradeRow[]): Omit<PositionSummary, "sy
 
   const avgCost = totalShares > 0 ? totalCost / totalShares : 0;
 
-  return { totalShares, avgCost, totalCost, realizedPL };
+  return { totalShares, avgCost, totalCost, realizedPL, totalFees };
 }
 
 /**
