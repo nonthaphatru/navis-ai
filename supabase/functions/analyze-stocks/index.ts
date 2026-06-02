@@ -91,6 +91,10 @@ const RSS_QUERIES = [
   // AI Industry
   { query: "artificial intelligence stocks technology", category: "ai" },
   { query: "AI chip semiconductor demand", category: "ai" },
+  // AI Companies — deals, partnerships, fundraising
+  { query: "OpenAI partnership deal investment", category: "ai" },
+  { query: "Anthropic Claude partnership deal", category: "ai" },
+  { query: "Google Gemini AI deal partnership", category: "ai" },
   // Gold & Commodities
   { query: "gold price XAU precious metals", category: "commodity" },
   // Priority stock-specific
@@ -575,7 +579,7 @@ FORMAT (follow this EXACT order):
 [1-2 sentences]
 
 🤖 AI & TECH
-[1-2 sentences]
+[1-2 sentences on AI industry + ALWAYS mention any OpenAI, Anthropic, or Google Gemini deals/partnerships/fundraising if found]
 
 💡 KEY TAKEAWAY: [1 sentence]
 
