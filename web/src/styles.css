@@ -226,3 +226,22 @@ input:focus, select:focus { outline: none; border-color: var(--blue); }
 .side-btn.active.sell { background: rgba(255, 69, 58, 0.18); color: var(--red); }
 .side-btn:hover { background: rgba(255,255,255,0.08); }
 
+/* ---------- currency toggle ---------- */
+.currency-toggle {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 12px;
+  background: var(--glass); border: 1px solid var(--hairline);
+  color: var(--text); cursor: pointer; font-size: 14px; font-weight: 600;
+  transition: all 0.2s;
+}
+.currency-toggle:hover { background: var(--glass-strong); }
+.currency-icon { font-size: 18px; }
+.currency-label { letter-spacing: 1px; }
+
+/* ---------- sort select ---------- */
+.sort-select {
+  background: rgba(255,255,255,0.05); border: 1px solid var(--hairline);
+  color: var(--text); padding: 8px 12px; border-radius: 10px;
+  font-size: 13px; cursor: pointer; min-width: 100px;
+}
+.sort-select:focus { outline: none; border-color: var(--blue); }

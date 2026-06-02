@@ -5,10 +5,25 @@ import { buildPositions } from "../lib/portfolio";
 import { CRYPTO_OPTIONS } from "../lib/cryptoList";
 import type { TradeRow, PositionSummary, AssetType, TradeSide, Quote } from "../types";
 
-const usd = (n: number) =>
-  n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+// ── Currency helpers ──
+type Currency = "USD" | "THB";
+const FMT: Record<Currency, (n: number) => string> = {
+  USD: (n) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }),
+  THB: (n) => "฿" + n.toLocaleString("en-US", { maximumFractionDigits: 0 }),
+};
 const pct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 const fmtDate = (d: string) => new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
+// ── Sorting ──
+type SortKey = "name" | "value" | "pl" | "pl_pct" | "realized" | "trades";
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: "name", label: "Name A→Z" },
+  { key: "value", label: "Value ↓" },
+  { key: "pl", label: "P/L ↓" },
+  { key: "pl_pct", label: "P/L % ↓" },
+  { key: "realized", label: "Realized ↓" },
+  { key: "trades", label: "# Trades ↓" },
+];
 
 export function Portfolio() {
   const [trades, setTrades] = useState<TradeRow[]>([]);
@@ -18,6 +33,11 @@ export function Portfolio() {
   const [updated, setUpdated] = useState<Date | null>(null);
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [sortBy, setSortBy] = useState<SortKey>("name");
+
+  // Currency
+  const [currency, setCurrency] = useState<Currency>("USD");
+  const [thbRate, setThbRate] = useState<number | null>(null);
 
   // Add trade form
   const [showForm, setShowForm] = useState(false);
@@ -30,7 +50,6 @@ export function Portfolio() {
   const [formDate, setFormDate] = useState(new Date().toISOString().split("T")[0]);
   const [formNote, setFormNote] = useState("");
   const [formErr, setFormErr] = useState("");
-  // When set, the form pre-fills for that ticker
   const [formTarget, setFormTarget] = useState<string | null>(null);
 
   // Edit mode
@@ -38,6 +57,20 @@ export function Portfolio() {
 
   const posRef = useRef<PositionSummary[]>([]);
   posRef.current = positions;
+
+  // ── Currency conversion ──
+  const c = (usdVal: number) => {
+    if (currency === "THB" && thbRate) return FMT.THB(usdVal * thbRate);
+    return FMT.USD(usdVal);
+  };
+
+  useEffect(() => {
+    // Fetch THB rate once
+    fetch("https://api.frankfurter.dev/v1/latest?base=USD&symbols=THB")
+      .then((r) => r.json())
+      .then((d) => { if (d?.rates?.THB) setThbRate(d.rates.THB); })
+      .catch(() => {});
+  }, []);
 
   // ── Load trades ──
   async function loadTrades() {
@@ -75,7 +108,6 @@ export function Portfolio() {
     return quotes[key]?.price ?? null;
   }
 
-  // ── Toggle expand ──
   function toggle(symbol: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -128,7 +160,6 @@ export function Portfolio() {
     if (!(p >= 0)) { setFormErr("Price must be 0 or greater."); return; }
     if (!formDate) { setFormErr("Select a date."); return; }
 
-    // Validate sell quantity
     if (formSide === "sell" && !editId) {
       const pos = positions.find((x) => x.symbol === sym);
       if (!pos || pos.totalShares < q) {
@@ -168,10 +199,31 @@ export function Portfolio() {
     await loadTrades();
   }
 
-  // ── Filter ──
+  // ── Filter + Sort ──
   const filtered = search.trim()
     ? positions.filter((p) => p.symbol.toLowerCase().includes(search.toLowerCase()))
     : positions;
+
+  const sorted = [...filtered].sort((a, b) => {
+    const priceA = priceFor(a);
+    const priceB = priceFor(b);
+    const mktA = priceA != null ? priceA * a.totalShares : 0;
+    const mktB = priceB != null ? priceB * b.totalShares : 0;
+    const plA = priceA != null ? mktA - a.totalCost : 0;
+    const plB = priceB != null ? mktB - b.totalCost : 0;
+    const plPctA = a.totalCost > 0 ? (plA / a.totalCost) * 100 : 0;
+    const plPctB = b.totalCost > 0 ? (plB / b.totalCost) * 100 : 0;
+
+    switch (sortBy) {
+      case "name": return a.symbol.localeCompare(b.symbol);
+      case "value": return mktB - mktA;
+      case "pl": return plB - plA;
+      case "pl_pct": return plPctB - plPctA;
+      case "realized": return b.realizedPL - a.realizedPL;
+      case "trades": return b.trades.length - a.trades.length;
+      default: return 0;
+    }
+  });
 
   // ── Totals ──
   let mktTotal = 0, costTotal = 0, realizedTotal = 0;
@@ -192,30 +244,44 @@ export function Portfolio() {
 
   return (
     <div>
-      <h2 className="page-title">Portfolio</h2>
+      {/* ── Title + Currency Toggle ── */}
+      <div className="row between">
+        <h2 className="page-title" style={{ margin: "4px 2px 16px" }}>Portfolio</h2>
+        <button
+          className="currency-toggle"
+          onClick={() => setCurrency((prev) => prev === "USD" ? "THB" : "USD")}
+          title={`Switch to ${currency === "USD" ? "THB" : "USD"}`}
+        >
+          <span className="currency-icon">{currency === "USD" ? "🇺🇸" : "🇹🇭"}</span>
+          <span className="currency-label">{currency}</span>
+        </button>
+      </div>
 
       {/* ── Summary Card ── */}
       <div className="glass card">
         <div className="section-label">Total market value</div>
-        <div className="big-number mono">{usd(mktTotal)}</div>
+        <div className="big-number mono">{c(mktTotal)}</div>
         <div className="row between" style={{ marginTop: 6 }}>
           <span className={`mono ${unrealizedPL >= 0 ? "pos" : "neg"}`}>
-            {unrealizedPL >= 0 ? "▲" : "▼"} {usd(Math.abs(unrealizedPL))} ({pct(unrealizedPct)})
+            {unrealizedPL >= 0 ? "▲" : "▼"} {c(Math.abs(unrealizedPL))} ({pct(unrealizedPct)})
           </span>
           <span className="updated">
             {updated ? `updated ${updated.toLocaleTimeString()}` : "fetching…"}
           </span>
         </div>
         <div className="row between" style={{ marginTop: 8 }}>
-          <span className="sub">Cost basis {usd(costTotal)}</span>
+          <span className="sub">Cost basis {c(costTotal)}</span>
           <span className={`sub mono ${realizedTotal >= 0 ? "pos" : "neg"}`}>
-            Realized {realizedTotal >= 0 ? "+" : ""}{usd(realizedTotal)}
+            Realized {realizedTotal >= 0 ? "+" : ""}{c(realizedTotal)}
           </span>
         </div>
+        {currency === "THB" && thbRate && (
+          <div className="sub" style={{ marginTop: 6 }}>Rate: 1 USD = {thbRate.toFixed(2)} THB</div>
+        )}
       </div>
 
-      {/* ── Search + Add ── */}
-      <div className="row between" style={{ margin: "16px 2px 8px", gap: 8 }}>
+      {/* ── Search + Sort + Add ── */}
+      <div className="row between" style={{ margin: "16px 2px 8px", gap: 8, flexWrap: "wrap" }}>
         <input
           id="portfolio-search"
           className="search-input"
@@ -223,8 +289,17 @@ export function Portfolio() {
           placeholder="🔍 Search tickers…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{ flex: 1 }}
+          style={{ flex: "1 1 140px" }}
         />
+        <select
+          className="sort-select"
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as SortKey)}
+        >
+          {SORT_OPTIONS.map((o) => (
+            <option key={o.key} value={o.key}>{o.label}</option>
+          ))}
+        </select>
         <button className="btn btn-sm btn-accent" onClick={() => openAddForm()}>
           + Add Trade
         </button>
@@ -242,7 +317,7 @@ export function Portfolio() {
               </select>
               {formAsset === "stock" ? (
                 <input
-                  placeholder="Ticker (e.g. SOFI)"
+                  placeholder="Ticker (e.g. SOFI, MTS-GOLD)"
                   value={formSymbol}
                   onChange={(e) => setFormSymbol(e.target.value)}
                   disabled={!!formTarget}
@@ -293,7 +368,7 @@ export function Portfolio() {
 
             {formQty && formPrice && (
               <div className="sub" style={{ marginBottom: 10 }}>
-                Total: {usd(parseFloat(formQty) * parseFloat(formPrice))}
+                Total: {c(parseFloat(formQty) * parseFloat(formPrice))}
               </div>
             )}
 
@@ -314,14 +389,14 @@ export function Portfolio() {
       {/* ── Positions ── */}
       {loading ? (
         <div className="spin">Loading…</div>
-      ) : filtered.length === 0 ? (
+      ) : sorted.length === 0 ? (
         <div className="glass card" style={{ textAlign: "center" }}>
           <p className="sub">
             {search ? `No tickers matching "${search}"` : 'No trades yet. Tap "+ Add Trade" to log your first one.'}
           </p>
         </div>
       ) : (
-        filtered.map((pos) => {
+        sorted.map((pos) => {
           const price = priceFor(pos);
           const mkt = price != null ? price * pos.totalShares : null;
           const unrealized = mkt != null ? mkt - pos.totalCost : null;
@@ -341,8 +416,8 @@ export function Portfolio() {
                   </div>
                   {isOpen ? (
                     <div className="sub mono">
-                      {pos.totalShares} shares @ {usd(pos.avgCost)}
-                      {price != null && ` · now ${usd(price)}`}
+                      {pos.totalShares} shares @ {c(pos.avgCost)}
+                      {price != null && ` · now ${c(price)}`}
                     </div>
                   ) : (
                     <div className="sub">Fully sold · {pos.trades.length} trades</div>
@@ -352,13 +427,13 @@ export function Portfolio() {
                   {isOpen && unrealized != null ? (
                     <>
                       <div className={`mono ${unrealized >= 0 ? "pos" : "neg"}`}>
-                        {unrealized >= 0 ? "+" : ""}{usd(unrealized)}
+                        {unrealized >= 0 ? "+" : ""}{c(unrealized)}
                       </div>
                       <div className={`sub mono ${unrealized >= 0 ? "pos" : "neg"}`}>{pct(unrealPct!)}</div>
                     </>
                   ) : !isOpen ? (
                     <div className={`mono ${pos.realizedPL >= 0 ? "pos" : "neg"}`}>
-                      {pos.realizedPL >= 0 ? "+" : ""}{usd(pos.realizedPL)}
+                      {pos.realizedPL >= 0 ? "+" : ""}{c(pos.realizedPL)}
                     </div>
                   ) : (
                     <span className="dim">—</span>
@@ -371,7 +446,7 @@ export function Portfolio() {
               {isOpen && pos.realizedPL !== 0 && (
                 <div className="sub" style={{ marginTop: 4 }}>
                   Realized P/L: <span className={`mono ${pos.realizedPL >= 0 ? "pos" : "neg"}`}>
-                    {pos.realizedPL >= 0 ? "+" : ""}{usd(pos.realizedPL)}
+                    {pos.realizedPL >= 0 ? "+" : ""}{c(pos.realizedPL)}
                   </span>
                 </div>
               )}
@@ -394,8 +469,8 @@ export function Portfolio() {
                       <div className="row" style={{ gap: 8, flex: 1 }}>
                         <span className="trade-date">{fmtDate(t.traded_at)}</span>
                         <span className={`trade-side ${t.side}`}>{t.side.toUpperCase()}</span>
-                        <span className="mono">{t.quantity} @ {usd(t.price)}</span>
-                        <span className="dim mono">{usd(t.quantity * t.price)}</span>
+                        <span className="mono">{t.quantity} @ {c(t.price)}</span>
+                        <span className="dim mono">{c(t.quantity * t.price)}</span>
                       </div>
                       <div className="row" style={{ gap: 4 }}>
                         {t.note && <span className="dim" title={t.note}>📝</span>}
