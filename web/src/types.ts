@@ -1,4 +1,5 @@
 export type AssetType = "stock" | "crypto";
+export type TradeSide = "buy" | "sell";
 
 export interface WatchlistRow {
   id: number;
@@ -19,6 +20,33 @@ export interface PositionRow {
   avg_buy_price: number;
   opened_at: string | null;
   note: string | null;
+}
+
+export interface TradeRow {
+  id: number;
+  symbol: string;
+  asset_type: AssetType;
+  coingecko_id: string | null;
+  side: TradeSide;
+  quantity: number;
+  price: number;
+  traded_at: string;
+  note: string | null;
+  created_at: string;
+}
+
+/** Computed from trades using weighted average cost */
+export interface PositionSummary {
+  symbol: string;
+  asset_type: AssetType;
+  coingecko_id: string | null;
+  totalShares: number;
+  avgCost: number;
+  totalCost: number;
+  realizedPL: number;
+  trades: TradeRow[];
+  firstTrade: string;
+  lastTrade: string;
 }
 
 export interface AppSettings {

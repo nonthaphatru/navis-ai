@@ -152,3 +152,77 @@ input:focus, select:focus { outline: none; border-color: var(--blue); }
 .ok { color: var(--green); font-size: 13px; }
 .spin { color: var(--text-dim); font-size: 14px; padding: 20px; text-align: center; }
 .updated { font-size: 12px; color: var(--text-dim); }
+
+/* ---------- search input ---------- */
+.search-input {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--hairline);
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 15px;
+}
+.search-input::placeholder { color: var(--text-dim); }
+.search-input:focus { outline: none; border-color: var(--blue); }
+
+/* ---------- ticker cards ---------- */
+.ticker-card { margin-top: 10px; transition: opacity 0.2s; }
+.ticker-card.closed { opacity: 0.55; }
+.ticker-card.closed:hover { opacity: 0.8; }
+
+.ticker-header {
+  display: flex; align-items: center; gap: 10px;
+  cursor: pointer; user-select: none;
+}
+
+.ticker-name { font-size: 17px; letter-spacing: 0.5px; }
+
+.chevron {
+  font-size: 12px; color: var(--text-dim);
+  transition: transform 0.25s ease;
+  margin-left: 4px;
+}
+.chevron.open { transform: rotate(180deg); }
+
+.closed-pill {
+  color: var(--text-dim); background: rgba(255,255,255,0.06);
+}
+
+/* ---------- trade history ---------- */
+.trade-history {
+  margin-top: 14px; padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+}
+
+.trade-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 8px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  font-size: 13px; flex-wrap: wrap;
+}
+.trade-row:last-child { border-bottom: none; }
+
+.trade-date { color: var(--text-dim); min-width: 78px; }
+
+.trade-side {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.8px;
+  padding: 2px 8px; border-radius: 6px;
+}
+.trade-side.buy { color: var(--green); background: rgba(48, 209, 88, 0.12); }
+.trade-side.sell { color: var(--red); background: rgba(255, 69, 58, 0.12); }
+
+/* ---------- buy/sell toggle ---------- */
+.side-toggle {
+  display: flex; gap: 0; border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--hairline);
+}
+.side-btn {
+  flex: 1; padding: 10px 20px; font-size: 14px; font-weight: 700;
+  letter-spacing: 1px; border: none; cursor: pointer;
+  background: rgba(255,255,255,0.04); color: var(--text-dim);
+  transition: all 0.2s;
+}
+.side-btn.active.buy { background: rgba(48, 209, 88, 0.18); color: var(--green); }
+.side-btn.active.sell { background: rgba(255, 69, 58, 0.18); color: var(--red); }
+.side-btn:hover { background: rgba(255,255,255,0.08); }
+
