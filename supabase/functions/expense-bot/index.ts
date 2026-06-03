@@ -322,6 +322,8 @@ interface BalanceResult {
   user2Paid: number;
   user1Expenses: number;
   user2Expenses: number;
+  u1OwesU2: number; // gross: how much u1 owes u2 from u2's expenses
+  u2OwesU1: number; // gross: how much u2 owes u1 from u1's expenses
   totalExpenses: number;
   totalSettled: number;
 }
@@ -338,6 +340,7 @@ async function getBalance(pairId: number, pair: any): Promise<BalanceResult> {
   let net = 0;
   let user1Paid = 0, user2Paid = 0;
   let user1Expenses = 0, user2Expenses = 0;
+  let u1OwesU2 = 0, u2OwesU1 = 0; // gross debts
 
   for (const e of (expenses || [])) {
     const amt = Number(e.amount);
@@ -346,8 +349,8 @@ async function getBalance(pairId: number, pair: any): Promise<BalanceResult> {
 
     if (e.split_type !== "half") continue;
     const half = amt / 2;
-    if (e.paid_by_uid === u1) net -= half;
-    else if (e.paid_by_uid === u2) net += half;
+    if (e.paid_by_uid === u1) { net -= half; u2OwesU1 += half; }
+    else if (e.paid_by_uid === u2) { net += half; u1OwesU2 += half; }
   }
 
   const { data: settlements } = await supabase
@@ -365,8 +368,8 @@ async function getBalance(pairId: number, pair: any): Promise<BalanceResult> {
 
   const totalExpenses = (expenses || []).reduce((sum: number, e: any) => sum + Number(e.amount), 0);
 
-  if (net > 0) return { owesAmount: net, debtorUid: u1, creditorUid: u2, user1Paid, user2Paid, user1Expenses, user2Expenses, totalExpenses, totalSettled };
-  return { owesAmount: Math.abs(net), debtorUid: u2, creditorUid: u1, user1Paid, user2Paid, user1Expenses, user2Expenses, totalExpenses, totalSettled };
+  if (net > 0) return { owesAmount: net, debtorUid: u1, creditorUid: u2, user1Paid, user2Paid, user1Expenses, user2Expenses, u1OwesU2, u2OwesU1, totalExpenses, totalSettled };
+  return { owesAmount: Math.abs(net), debtorUid: u2, creditorUid: u1, user1Paid, user2Paid, user1Expenses, user2Expenses, u1OwesU2, u2OwesU1, totalExpenses, totalSettled };
 }
 
 function partnerUid(pair: any, myUid: number): number {
@@ -392,22 +395,27 @@ function formatBalDetailed(bal: BalanceResult, pair: any): string {
 
   let msg = `💰 <b>Balance</b>\n━━━━━━━━━━━━━━━━\n\n`;
 
-  // Per-person breakdown
+  // User 1
   msg += `👤 <b>${n1}</b>\n`;
   msg += `   Paid: ฿${Math.round(bal.user1Paid).toLocaleString()} (${bal.user1Expenses} items)\n`;
+  msg += `   Owes ${n2}: ฿${Math.round(bal.u1OwesU2).toLocaleString()}\n`;
+  msg += `   Owed by ${n2}: ฿${Math.round(bal.u2OwesU1).toLocaleString()}\n`;
   if (bal.debtorUid === pair.user1_uid) {
-    msg += `   ⚠️ Owes ฿${Math.round(bal.owesAmount).toLocaleString()}\n`;
-  } else {
-    msg += `   ✅ Is owed ฿${Math.round(bal.owesAmount).toLocaleString()}\n`;
+    msg += `   ⚠️ Net: owes ฿${Math.round(bal.owesAmount).toLocaleString()}\n`;
+  } else if (bal.owesAmount >= 1) {
+    msg += `   ✅ Net: is owed ฿${Math.round(bal.owesAmount).toLocaleString()}\n`;
   }
   msg += `\n`;
 
+  // User 2
   msg += `👤 <b>${n2}</b>\n`;
   msg += `   Paid: ฿${Math.round(bal.user2Paid).toLocaleString()} (${bal.user2Expenses} items)\n`;
+  msg += `   Owes ${n1}: ฿${Math.round(bal.u2OwesU1).toLocaleString()}\n`;
+  msg += `   Owed by ${n1}: ฿${Math.round(bal.u1OwesU2).toLocaleString()}\n`;
   if (bal.debtorUid === pair.user2_uid) {
-    msg += `   ⚠️ Owes ฿${Math.round(bal.owesAmount).toLocaleString()}\n`;
-  } else {
-    msg += `   ✅ Is owed ฿${Math.round(bal.owesAmount).toLocaleString()}\n`;
+    msg += `   ⚠️ Net: owes ฿${Math.round(bal.owesAmount).toLocaleString()}\n`;
+  } else if (bal.owesAmount >= 1) {
+    msg += `   ✅ Net: is owed ฿${Math.round(bal.owesAmount).toLocaleString()}\n`;
   }
   msg += `\n`;
 
