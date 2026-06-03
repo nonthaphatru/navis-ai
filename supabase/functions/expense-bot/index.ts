@@ -243,65 +243,130 @@ For "settle":
 For others:
 { "intent": "<intent_name>" }`;
 
+// Simple regex fallback when AI fails or is unavailable
+function regexParse(msg: string): any | null {
+  // Match patterns like: "lunch 350", "ข้าวผัด 120", "grab taxi 89"
+  const numMatch = msg.match(/(\d[\d,]*\.?\d*)/); 
+  if (!numMatch) return null;
+  const amount = parseFloat(numMatch[1].replace(/,/g, ""));
+  if (!amount || amount <= 0) return null;
+  
+  const note = msg.replace(numMatch[0], "").replace(/บาท|baht|thb/gi, "").trim();
+  
+  // Detect paid_by
+  let paid_by = "sender";
+  if (/แฟนจ่าย|gf paid|bf paid|partner paid|เขาจ่าย/i.test(msg)) paid_by = "partner";
+  
+  // Detect split
+  let split = "half";
+  if (/เลี้ยง|treat|no split|ไม่หาร/i.test(msg)) split = "full";
+  
+  // Detect category from keywords
+  let category = "other";
+  const lower = msg.toLowerCase();
+  if (/food|lunch|dinner|breakfast|ข้าว|อาหาร|shabu|sushi|ramen|noodle|pizza|burger|rice|curry|pad|som|tom|ก๋วยเตี๋ยว|ส้มตำ|ผัด|แกง|หมู|ไก่|ปลา|กุ้ง|kouen|yakiniku|bbq|buffet|steak/i.test(lower)) category = "food";
+  else if (/coffee|cafe|starbucks|กาแฟ|cha|tea|boba|milk tea/i.test(lower)) category = "drinks";
+  else if (/grab|taxi|bolt|bts|mrt|bus|train|toll|gas|fuel|parking|น้ำมัน|ค่ารถ|แท็กซี่|มอเตอร์ไซค์/i.test(lower)) category = "transport";
+  else if (/shopping|shop|clothes|เสื้อผ้า|ซื้อของ|lazada|shopee/i.test(lower)) category = "shopping";
+  else if (/rent|electric|water|internet|phone|ค่าเช่า|ค่าไฟ|ค่าน้ำ|ค่าเน็ต|bill/i.test(lower)) category = "bills";
+  else if (/movie|concert|game|netflix|spotify|cinema|ดูหนัง/i.test(lower)) category = "entertainment";
+  else if (/grocery|groceries|market|supermarket|ตลาด|โลตัส|แม็คโคร|7-11|เซเว่น/i.test(lower)) category = "groceries";
+  else if (/doctor|hospital|medicine|pharmacy|หมอ|โรงพยาบาล|ยา/i.test(lower)) category = "health";
+  else if (/salon|nail|hair|spa|beauty|เสริมสวย|ทำเล็บ|ทำผม/i.test(lower)) category = "beauty";
+  
+  return { intent: "log_expense", amount, category, paid_by, note: note || category, split };
+}
+
 async function parseWithAI(message: string): Promise<any> {
-  if (!GEMINI_API_KEY) return { intent: "unknown" };
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-          contents: [{ role: "user", parts: [{ text: message }] }],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 512, responseMimeType: "application/json" },
-        }),
+  // Try AI first
+  if (GEMINI_API_KEY) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+            contents: [{ role: "user", parts: [{ text: message }] }],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 512, responseMimeType: "application/json" },
+          }),
+        }
+      );
+      const data = await res.json();
+      console.log("Gemini response:", JSON.stringify(data).slice(0, 500));
+      const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.intent && parsed.intent !== "unknown") return parsed;
       }
-    );
-    const data = await res.json();
-    const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-    return JSON.parse(raw);
-  } catch {
-    return { intent: "unknown" };
+    } catch (err) {
+      console.error("AI parse error:", err);
+    }
   }
+
+  // Fallback: regex-based parser
+  console.log("Using regex fallback for:", message);
+  const fallback = regexParse(message);
+  if (fallback) return fallback;
+
+  return { intent: "unknown" };
 }
 
 // ── Balance Calculation ─────────────────────────────────────────────────────
+interface BalanceResult {
+  owesAmount: number;
+  debtorUid: number;
+  creditorUid: number;
+  user1Paid: number;
+  user2Paid: number;
+  user1Expenses: number;
+  user2Expenses: number;
+  totalExpenses: number;
+  totalSettled: number;
+}
 
-async function getBalance(pairId: number, pair: any): Promise<{ owesAmount: number; debtorUid: number; creditorUid: number }> {
+async function getBalance(pairId: number, pair: any): Promise<BalanceResult> {
   const u1 = pair.user1_uid;
   const u2 = pair.user2_uid;
 
-  // Get expenses
   const { data: expenses } = await supabase
     .from("expenses")
     .select("*")
     .eq("pair_id", pairId);
 
-  // net > 0 means user1 owes user2
   let net = 0;
+  let user1Paid = 0, user2Paid = 0;
+  let user1Expenses = 0, user2Expenses = 0;
+
   for (const e of (expenses || [])) {
+    const amt = Number(e.amount);
+    if (e.paid_by_uid === u1) { user1Paid += amt; user1Expenses++; }
+    else if (e.paid_by_uid === u2) { user2Paid += amt; user2Expenses++; }
+
     if (e.split_type !== "half") continue;
-    const half = Number(e.amount) / 2;
-    if (e.paid_by_uid === u1) net -= half; // u1 paid → u2 owes → net decreases
-    else if (e.paid_by_uid === u2) net += half; // u2 paid → u1 owes → net increases
+    const half = amt / 2;
+    if (e.paid_by_uid === u1) net -= half;
+    else if (e.paid_by_uid === u2) net += half;
   }
 
-  // Apply settlements
   const { data: settlements } = await supabase
     .from("settlements")
     .select("*")
     .eq("pair_id", pairId);
 
+  let totalSettled = 0;
   for (const s of (settlements || [])) {
     const amt = Number(s.amount);
-    if (s.from_uid === u1) net -= amt; // u1 transferred → u1 owes less
-    else if (s.from_uid === u2) net += amt; // u2 transferred → u2 owes less
+    totalSettled += amt;
+    if (s.from_uid === u1) net -= amt;
+    else if (s.from_uid === u2) net += amt;
   }
 
-  // positive net = user1 owes user2
-  if (net > 0) return { owesAmount: net, debtorUid: u1, creditorUid: u2 };
-  return { owesAmount: Math.abs(net), debtorUid: u2, creditorUid: u1 };
+  const totalExpenses = (expenses || []).reduce((sum: number, e: any) => sum + Number(e.amount), 0);
+
+  if (net > 0) return { owesAmount: net, debtorUid: u1, creditorUid: u2, user1Paid, user2Paid, user1Expenses, user2Expenses, totalExpenses, totalSettled };
+  return { owesAmount: Math.abs(net), debtorUid: u2, creditorUid: u1, user1Paid, user2Paid, user1Expenses, user2Expenses, totalExpenses, totalSettled };
 }
 
 function partnerUid(pair: any, myUid: number): number {
@@ -314,11 +379,53 @@ function nameForUid(pair: any, uid: number): string {
   return "?";
 }
 
-function formatBal(amount: number, debtorUid: number, pair: any): string {
-  if (amount < 1) return "✅ All settled! No one owes anything.";
-  const debtorName = nameForUid(pair, debtorUid);
-  const creditorName = nameForUid(pair, debtorUid === pair.user1_uid ? pair.user2_uid : pair.user1_uid);
-  return `💰 <b>${debtorName}</b> owes <b>${creditorName}</b>: <b>฿${Math.round(amount).toLocaleString()}</b>`;
+function formatBalShort(bal: BalanceResult, pair: any): string {
+  if (bal.owesAmount < 1) return "✅ All settled! No one owes anything.";
+  const debtorName = nameForUid(pair, bal.debtorUid);
+  const creditorName = nameForUid(pair, bal.debtorUid === pair.user1_uid ? pair.user2_uid : pair.user1_uid);
+  return `💰 <b>${debtorName}</b> owes <b>${creditorName}</b>: <b>฿${Math.round(bal.owesAmount).toLocaleString()}</b>`;
+}
+
+function formatBalDetailed(bal: BalanceResult, pair: any): string {
+  const n1 = pair.user1_name;
+  const n2 = pair.user2_name;
+
+  let msg = `💰 <b>Balance</b>\n━━━━━━━━━━━━━━━━\n\n`;
+
+  // Per-person breakdown
+  msg += `👤 <b>${n1}</b>\n`;
+  msg += `   Paid: ฿${Math.round(bal.user1Paid).toLocaleString()} (${bal.user1Expenses} items)\n`;
+  if (bal.debtorUid === pair.user1_uid) {
+    msg += `   ⚠️ Owes ฿${Math.round(bal.owesAmount).toLocaleString()}\n`;
+  } else {
+    msg += `   ✅ Is owed ฿${Math.round(bal.owesAmount).toLocaleString()}\n`;
+  }
+  msg += `\n`;
+
+  msg += `👤 <b>${n2}</b>\n`;
+  msg += `   Paid: ฿${Math.round(bal.user2Paid).toLocaleString()} (${bal.user2Expenses} items)\n`;
+  if (bal.debtorUid === pair.user2_uid) {
+    msg += `   ⚠️ Owes ฿${Math.round(bal.owesAmount).toLocaleString()}\n`;
+  } else {
+    msg += `   ✅ Is owed ฿${Math.round(bal.owesAmount).toLocaleString()}\n`;
+  }
+  msg += `\n`;
+
+  // Bottom line
+  msg += `━━━━━━━━━━━━━━━━\n`;
+  msg += `📊 Total: ฿${Math.round(bal.totalExpenses).toLocaleString()}`;
+  if (bal.totalSettled > 0) msg += ` · Settled: ฿${Math.round(bal.totalSettled).toLocaleString()}`;
+  msg += `\n`;
+
+  if (bal.owesAmount < 1) {
+    msg += `\n✅ All settled!`;
+  } else {
+    const debtorName = nameForUid(pair, bal.debtorUid);
+    const creditorName = nameForUid(pair, bal.debtorUid === pair.user1_uid ? pair.user2_uid : pair.user1_uid);
+    msg += `\n💸 <b>${debtorName}</b> → pay <b>${creditorName}</b>: <b>฿${Math.round(bal.owesAmount).toLocaleString()}</b>`;
+  }
+
+  return msg;
 }
 
 // ── Require pair guard ──────────────────────────────────────────────────────
@@ -375,8 +482,8 @@ async function handleLogExpense(chatId: number, from: any, pair: any, parsed: an
     return;
   }
 
-  const { owesAmount, debtorUid } = await getBalance(pair.id, pair);
-  const balStr = formatBal(owesAmount, debtorUid, pair);
+  const bal = await getBalance(pair.id, pair);
+  const balStr = formatBalShort(bal, pair);
 
   const splitLabel = split === "half" ? "Split 50/50" : "No split (treat 🎁)";
   const halfAmt = split === "half" ? Math.round(amount / 2) : 0;
@@ -437,15 +544,17 @@ async function handleEditLast(chatId: number, from: any, pair: any, parsed: any)
 }
 
 async function handleDeleteLast(chatId: number, from: any, pair: any) {
+  // Only undo YOUR OWN last expense (matched by chat_id)
   const { data } = await supabase
     .from("expenses")
     .select("*")
     .eq("pair_id", pair.id)
+    .eq("chat_id", chatId)
     .order("created_at", { ascending: false })
     .limit(1);
 
   if (!data || data.length === 0) {
-    await send(chatId, "❌ No expenses to delete.");
+    await send(chatId, "❌ No expenses from you to undo.");
     return;
   }
 
@@ -494,7 +603,7 @@ async function handleSettle(chatId: number, from: any, pair: any, parsed: any) {
   });
 
   const newBal = await getBalance(pair.id, pair);
-  const newBalStr = formatBal(newBal.owesAmount, newBal.debtorUid, pair);
+  const newBalStr = formatBalShort(newBal, pair);
 
   const msg = `💸 <b>Settlement!</b>\n\n` +
     `${nameForUid(pair, fromUid)} → ${nameForUid(pair, toUid)}\n` +
@@ -505,8 +614,8 @@ async function handleSettle(chatId: number, from: any, pair: any, parsed: any) {
 }
 
 async function handleBalance(chatId: number, pair: any) {
-  const { owesAmount, debtorUid } = await getBalance(pair.id, pair);
-  await send(chatId, formatBal(owesAmount, debtorUid, pair));
+  const bal = await getBalance(pair.id, pair);
+  await send(chatId, formatBalDetailed(bal, pair));
 }
 
 async function handleSummary(chatId: number, pair: any) {
@@ -547,8 +656,8 @@ async function handleSummary(chatId: number, pair: any) {
     msg += `${emoji} <b>${cat}</b>  ฿${amt.toLocaleString()}  ${p}%\n${bar}\n`;
   }
 
-  const { owesAmount, debtorUid } = await getBalance(pair.id, pair);
-  msg += `\n${formatBal(owesAmount, debtorUid, pair)}`;
+  const bal = await getBalance(pair.id, pair);
+  msg += `\n${formatBalShort(bal, pair)}`;
 
   await send(chatId, msg);
 }
