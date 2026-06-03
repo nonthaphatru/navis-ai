@@ -225,8 +225,9 @@ Rules for paid_by:
 - If message says "ฉันจ่าย", "I paid", "ผมจ่าย" → "sender"
 
 Rules for split:
-- Default is "half" (split 50/50)
-- If message says "ไม่หาร", "no split", "full", "เลี้ยง", "my treat", "treat" → "full"
+- Default is "half" (split 50/50, each owes half)
+- If message says "ไม่หาร", "no split", "full", "for [name]" → "full" (the OTHER person owes the FULL amount)
+- If message says "เลี้ยง", "my treat", "treat", "ของขวัญ", "gift" → "treat" (payer covers all, NO debt created)
 
 For "edit_last":
 { "intent": "edit_last", "changes": { "amount": <new number if mentioned>, "category": "<new cat if mentioned>", "note": "<new note if mentioned>" } }
@@ -259,7 +260,8 @@ function regexParse(msg: string): any | null {
   
   // Detect split
   let split = "half";
-  if (/เลี้ยง|treat|no split|ไม่หาร/i.test(msg)) split = "full";
+  if (/no split|ไม่หาร|full|for \w+/i.test(msg)) split = "full";
+  if (/เลี้ยง|treat|gift|ของขวัญ/i.test(msg)) split = "treat";
   
   // Detect category from keywords
   let category = "other";
@@ -347,10 +349,18 @@ async function getBalance(pairId: number, pair: any): Promise<BalanceResult> {
     if (e.paid_by_uid === u1) { user1Paid += amt; user1Expenses++; }
     else if (e.paid_by_uid === u2) { user2Paid += amt; user2Expenses++; }
 
-    if (e.split_type !== "half") continue;
-    const half = amt / 2;
-    if (e.paid_by_uid === u1) { net -= half; u2OwesU1 += half; }
-    else if (e.paid_by_uid === u2) { net += half; u1OwesU2 += half; }
+    if (e.split_type === "treat") continue; // treat = no debt
+
+    if (e.split_type === "full") {
+      // Full: other person owes the entire amount
+      if (e.paid_by_uid === u1) { net -= amt; u2OwesU1 += amt; }
+      else if (e.paid_by_uid === u2) { net += amt; u1OwesU2 += amt; }
+    } else {
+      // Half: split 50/50
+      const half = amt / 2;
+      if (e.paid_by_uid === u1) { net -= half; u2OwesU1 += half; }
+      else if (e.paid_by_uid === u2) { net += half; u1OwesU2 += half; }
+    }
   }
 
   const { data: settlements } = await supabase
@@ -493,8 +503,9 @@ async function handleLogExpense(chatId: number, from: any, pair: any, parsed: an
   const bal = await getBalance(pair.id, pair);
   const balStr = formatBalShort(bal, pair);
 
-  const splitLabel = split === "half" ? "Split 50/50" : "No split (treat 🎁)";
-  const halfAmt = split === "half" ? Math.round(amount / 2) : 0;
+  const splitLabels: Record<string, string> = { half: "Split 50/50", full: "Full amount owed", treat: "Treat 🎁 (no debt)" };
+  const splitLabel = splitLabels[split] || "Split 50/50";
+  const oweAmt = split === "half" ? Math.round(amount / 2) : split === "full" ? amount : 0;
 
   let msg = `✅ <b>Logged!</b>\n\n`;
   msg += `${emoji} <b>${category.charAt(0).toUpperCase() + category.slice(1)}</b>`;
@@ -502,7 +513,7 @@ async function handleLogExpense(chatId: number, from: any, pair: any, parsed: an
   msg += `\n💵 <b>฿${amount.toLocaleString()}</b>\n`;
   msg += `👤 Paid by: <b>${paidByName}</b>\n`;
   msg += `📐 ${splitLabel}`;
-  if (split === "half") msg += ` (฿${halfAmt.toLocaleString()} each)`;
+  if (oweAmt > 0) msg += ` (฿${oweAmt.toLocaleString()} owed)`;
   msg += `\n\n${balStr}`;
 
   await send(chatId, msg);
@@ -689,7 +700,7 @@ async function handleHistory(chatId: number, pair: any) {
     const date = new Date(e.logged_at).toLocaleDateString("en-GB", {
       day: "2-digit", month: "short", timeZone: "Asia/Bangkok",
     });
-    const tag = e.split_type === "full" ? " 🎁" : "";
+    const tag = e.split_type === "treat" ? " 🎁" : e.split_type === "full" ? " 💯" : "";
     msg += `${date}  ${emoji} ${e.note || e.category}  <b>฿${Number(e.amount).toLocaleString()}</b>  ${e.paid_by_name}${tag}\n`;
   }
 
