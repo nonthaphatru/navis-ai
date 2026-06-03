@@ -1,6 +1,7 @@
 // ============================================================================
 // Navis Expense Bot — AI-powered expense tracker for Telegram
 // Natural language (Thai + English) · Auto-categorize · Debt tracking
+// Pairing system: both partners use private chats with persistent keyboard
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -21,7 +22,7 @@ const CAT_EMOJI: Record<string, string> = {
   groceries: "🛒", beauty: "💅", education: "📚", other: "📦",
 };
 
-// ── Persistent keyboard ─────────────────────────────────────────────────────
+// ── Persistent keyboard (works in private chats) ────────────────────────────
 const KEYBOARD = {
   keyboard: [
     [{ text: "💰 Balance" }, { text: "📊 Summary" }],
@@ -47,10 +48,149 @@ async function send(chatId: number, text: string, extra?: Record<string, unknown
   });
 }
 
+// Also notify the partner in their private chat
+async function notifyPartner(pair: any, senderUid: number, text: string) {
+  const partnerChatId = senderUid === pair.user1_uid ? pair.user2_chat_id : pair.user1_chat_id;
+  if (partnerChatId) {
+    await send(partnerChatId, text);
+  }
+}
+
 function userName(from: any): string {
   if (from?.first_name) return from.first_name;
   if (from?.username) return from.username;
   return "Unknown";
+}
+
+// ── Pairing System ──────────────────────────────────────────────────────────
+
+function generateCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "NAVIS-";
+  for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+async function findPair(uid: number): Promise<any | null> {
+  // Check if user is user1 or user2 in any pair
+  const { data: p1 } = await supabase
+    .from("pairs")
+    .select("*")
+    .eq("user1_uid", uid)
+    .not("user2_uid", "is", null)
+    .limit(1);
+  if (p1 && p1.length > 0) return p1[0];
+
+  const { data: p2 } = await supabase
+    .from("pairs")
+    .select("*")
+    .eq("user2_uid", uid)
+    .limit(1);
+  if (p2 && p2.length > 0) return p2[0];
+
+  return null;
+}
+
+async function handlePair(chatId: number, from: any, args: string) {
+  const uid = from.id;
+  const name = userName(from);
+
+  // Check if already paired
+  const existing = await findPair(uid);
+  if (existing) {
+    const partnerName = existing.user1_uid === uid ? existing.user2_name : existing.user1_name;
+    await send(chatId,
+      `✅ You're already paired with <b>${partnerName}</b>!\n\n` +
+      `Use /unpair to disconnect first.`
+    );
+    return;
+  }
+
+  if (args.trim()) {
+    // ── Joining with a code ──
+    const code = args.trim().toUpperCase();
+    const { data } = await supabase
+      .from("pairs")
+      .select("*")
+      .eq("pair_code", code)
+      .is("user2_uid", null)
+      .limit(1);
+
+    if (!data || data.length === 0) {
+      await send(chatId, "❌ Invalid or expired code. Ask your partner to send /pair again.");
+      return;
+    }
+
+    const pair = data[0];
+
+    if (pair.user1_uid === uid) {
+      await send(chatId, "❌ You can't pair with yourself! Send the code to your partner.");
+      return;
+    }
+
+    // Complete the pair
+    await supabase.from("pairs").update({
+      user2_uid: uid,
+      user2_name: name,
+      user2_chat_id: chatId,
+    }).eq("id", pair.id);
+
+    await send(chatId,
+      `✅ <b>Paired with ${pair.user1_name}!</b>\n\n` +
+      `You can now log expenses. Try:\n` +
+      `• "lunch 350"\n` +
+      `• "ข้าวผัด 120"\n\n` +
+      `Keyboard buttons are ready! 👇`
+    );
+
+    // Notify partner
+    await send(pair.user1_chat_id,
+      `🎉 <b>${name}</b> just paired with you!\n\n` +
+      `You're all set. Start logging expenses!`
+    );
+  } else {
+    // ── Creating a new pair code ──
+    const code = generateCode();
+
+    // Remove any pending (incomplete) pairs from this user
+    await supabase.from("pairs").delete()
+      .eq("user1_uid", uid)
+      .is("user2_uid", null);
+
+    await supabase.from("pairs").insert({
+      pair_code: code,
+      user1_uid: uid,
+      user1_name: name,
+      user1_chat_id: chatId,
+    });
+
+    await send(chatId,
+      `🔗 <b>Your pair code:</b>\n\n` +
+      `<code>${code}</code>\n\n` +
+      `Send this code to your partner.\n` +
+      `They open @expense_navis_bot and type:\n` +
+      `/pair ${code}`
+    );
+  }
+}
+
+async function handleUnpair(chatId: number, from: any) {
+  const pair = await findPair(from.id);
+  if (!pair) {
+    await send(chatId, "You're not paired with anyone.");
+    return;
+  }
+
+  // Notify partner before deleting
+  const partnerChatId = pair.user1_uid === from.id ? pair.user2_chat_id : pair.user1_chat_id;
+  const partnerName = pair.user1_uid === from.id ? pair.user2_name : pair.user1_name;
+
+  await supabase.from("pairs").delete().eq("id", pair.id);
+
+  await send(chatId, `🔓 Unpaired from <b>${partnerName}</b>. Expense data is kept.`);
+  if (partnerChatId) {
+    await send(partnerChatId, `🔓 <b>${userName(from)}</b> has unpaired. Use /pair to reconnect.`);
+  }
 }
 
 // ── AI Parsing ──────────────────────────────────────────────────────────────
@@ -105,7 +245,6 @@ For others:
 
 async function parseWithAI(message: string): Promise<any> {
   if (!GEMINI_API_KEY) return { intent: "unknown" };
-
   try {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
@@ -115,11 +254,7 @@ async function parseWithAI(message: string): Promise<any> {
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
           contents: [{ role: "user", parts: [{ text: message }] }],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 512,
-            responseMimeType: "application/json",
-          },
+          generationConfig: { temperature: 0.1, maxOutputTokens: 512, responseMimeType: "application/json" },
         }),
       }
     );
@@ -131,117 +266,91 @@ async function parseWithAI(message: string): Promise<any> {
   }
 }
 
-// ── Debt Calculation ────────────────────────────────────────────────────────
+// ── Balance Calculation ─────────────────────────────────────────────────────
 
-interface UserBalance {
-  uid: number;
-  name: string;
-  owes: number; // positive = this user owes money, negative = is owed money
-}
+async function getBalance(pairId: number, pair: any): Promise<{ owesAmount: number; debtorUid: number; creditorUid: number }> {
+  const u1 = pair.user1_uid;
+  const u2 = pair.user2_uid;
 
-async function getBalance(chatId: number): Promise<{ users: Map<number, string>; netByUser: Map<number, number> }> {
-  const users = new Map<number, string>();
-  const netByUser = new Map<number, number>(); // positive = owes, negative = is owed
-
-  // Get all expenses
+  // Get expenses
   const { data: expenses } = await supabase
     .from("expenses")
     .select("*")
-    .eq("chat_id", chatId)
-    .order("logged_at", { ascending: true });
+    .eq("pair_id", pairId);
 
-  if (!expenses || expenses.length === 0) return { users, netByUser };
-
-  // Collect unique users
-  for (const e of expenses) {
-    if (!users.has(e.paid_by_uid)) users.set(e.paid_by_uid, e.paid_by_name);
-  }
-
-  // If only one user, we can't calculate pair debts — return zero
-  const uids = [...users.keys()];
-  if (uids.length < 2) return { users, netByUser };
-
-  // Calculate: for each expense paid by X with split=half,
-  // the OTHER person owes X half the amount
-  for (const e of expenses) {
+  // net > 0 means user1 owes user2
+  let net = 0;
+  for (const e of (expenses || [])) {
     if (e.split_type !== "half") continue;
-    const halfAmount = Number(e.amount) / 2;
-    const payer = e.paid_by_uid;
-
-    // Payer is owed money (negative = owed)
-    netByUser.set(payer, (netByUser.get(payer) || 0) - halfAmount);
-
-    // The other user(s) owe money
-    for (const uid of uids) {
-      if (uid !== payer) {
-        netByUser.set(uid, (netByUser.get(uid) || 0) + halfAmount);
-      }
-    }
+    const half = Number(e.amount) / 2;
+    if (e.paid_by_uid === u1) net -= half; // u1 paid → u2 owes → net decreases
+    else if (e.paid_by_uid === u2) net += half; // u2 paid → u1 owes → net increases
   }
 
   // Apply settlements
   const { data: settlements } = await supabase
     .from("settlements")
     .select("*")
-    .eq("chat_id", chatId);
+    .eq("pair_id", pairId);
 
-  if (settlements) {
-    for (const s of settlements) {
-      const amount = Number(s.amount);
-      // from_uid transferred to to_uid → from_uid owes less, to_uid is owed less
-      netByUser.set(s.from_uid, (netByUser.get(s.from_uid) || 0) - amount);
-      netByUser.set(s.to_uid, (netByUser.get(s.to_uid) || 0) + amount);
-      if (!users.has(s.from_uid)) users.set(s.from_uid, s.from_name);
-      if (!users.has(s.to_uid)) users.set(s.to_uid, s.to_name);
-    }
+  for (const s of (settlements || [])) {
+    const amt = Number(s.amount);
+    if (s.from_uid === u1) net -= amt; // u1 transferred → u1 owes less
+    else if (s.from_uid === u2) net += amt; // u2 transferred → u2 owes less
   }
 
-  return { users, netByUser };
+  // positive net = user1 owes user2
+  if (net > 0) return { owesAmount: net, debtorUid: u1, creditorUid: u2 };
+  return { owesAmount: Math.abs(net), debtorUid: u2, creditorUid: u1 };
 }
 
-function formatBalance(users: Map<number, string>, netByUser: Map<number, number>): string {
-  if (users.size < 2) return "No expenses logged between two people yet.";
+function partnerUid(pair: any, myUid: number): number {
+  return myUid === pair.user1_uid ? pair.user2_uid : pair.user1_uid;
+}
 
-  const entries = [...netByUser.entries()];
-  // Find who owes (positive value)
-  const debtor = entries.find(([, v]) => v > 0.5);
+function nameForUid(pair: any, uid: number): string {
+  if (uid === pair.user1_uid) return pair.user1_name;
+  if (uid === pair.user2_uid) return pair.user2_name;
+  return "?";
+}
 
-  if (!debtor) return "✅ All settled! No one owes anything.";
+function formatBal(amount: number, debtorUid: number, pair: any): string {
+  if (amount < 1) return "✅ All settled! No one owes anything.";
+  const debtorName = nameForUid(pair, debtorUid);
+  const creditorName = nameForUid(pair, debtorUid === pair.user1_uid ? pair.user2_uid : pair.user1_uid);
+  return `💰 <b>${debtorName}</b> owes <b>${creditorName}</b>: <b>฿${Math.round(amount).toLocaleString()}</b>`;
+}
 
-  const [debtorUid, amount] = debtor;
-  const debtorName = users.get(debtorUid) || "?";
-  const creditorEntry = entries.find(([uid]) => uid !== debtorUid);
-  const creditorName = creditorEntry ? users.get(creditorEntry[0]) || "?" : "?";
-
-  return `💰 <b>Balance</b>\n\n` +
-    `<b>${debtorName}</b> owes <b>${creditorName}</b>\n` +
-    `💵 <b>฿${Math.abs(amount).toLocaleString("en-US", { maximumFractionDigits: 0 })}</b>`;
+// ── Require pair guard ──────────────────────────────────────────────────────
+async function requirePair(chatId: number, uid: number): Promise<any | null> {
+  const pair = await findPair(uid);
+  if (!pair) {
+    await send(chatId,
+      `🔗 You need to pair first!\n\n` +
+      `<b>Step 1:</b> Type /pair to get a code\n` +
+      `<b>Step 2:</b> Send the code to your partner\n` +
+      `<b>Step 3:</b> They type /pair CODE`
+    );
+    return null;
+  }
+  return pair;
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────────
 
-async function handleLogExpense(chatId: number, from: any, parsed: any) {
+async function handleLogExpense(chatId: number, from: any, pair: any, parsed: any) {
   const amount = Number(parsed.amount);
   if (!amount || amount <= 0) {
-    await send(chatId, "❌ ไม่เข้าใจจำนวนเงิน / I didn't catch the amount. Try again?");
+    await send(chatId, "❌ ไม่เข้าใจจำนวนเงิน / Didn't catch the amount. Try again?");
     return;
   }
 
-  // Determine who paid
   let paidByUid = from.id;
   let paidByName = userName(from);
 
   if (parsed.paid_by === "partner") {
-    // We don't know the partner's telegram ID yet — store with a flag
-    // We'll use 0 as a placeholder and resolve later from chat history
-    const partnerInfo = await findPartner(chatId, from.id);
-    if (partnerInfo) {
-      paidByUid = partnerInfo.uid;
-      paidByName = partnerInfo.name;
-    } else {
-      paidByUid = 0;
-      paidByName = "Partner";
-    }
+    paidByUid = partnerUid(pair, from.id);
+    paidByName = nameForUid(pair, paidByUid);
   }
 
   const category = parsed.category || "other";
@@ -251,6 +360,7 @@ async function handleLogExpense(chatId: number, from: any, parsed: any) {
 
   const { error } = await supabase.from("expenses").insert({
     chat_id: chatId,
+    pair_id: pair.id,
     amount,
     category,
     paid_by_uid: paidByUid,
@@ -265,47 +375,34 @@ async function handleLogExpense(chatId: number, from: any, parsed: any) {
     return;
   }
 
-  // Calculate new balance
-  const { users, netByUser } = await getBalance(chatId);
-  const balanceStr = formatBalance(users, netByUser);
+  const { owesAmount, debtorUid } = await getBalance(pair.id, pair);
+  const balStr = formatBal(owesAmount, debtorUid, pair);
 
-  const splitLabel = split === "half" ? "Split 50/50" : "No split (treat)";
-  const halfAmount = split === "half" ? Math.round(amount / 2) : 0;
+  const splitLabel = split === "half" ? "Split 50/50" : "No split (treat 🎁)";
+  const halfAmt = split === "half" ? Math.round(amount / 2) : 0;
 
-  let response = `✅ <b>Logged!</b>\n\n`;
-  response += `${emoji} <b>${category.charAt(0).toUpperCase() + category.slice(1)}</b>`;
-  if (note) response += ` — ${note}`;
-  response += `\n`;
-  response += `💵 <b>฿${amount.toLocaleString()}</b>\n`;
-  response += `👤 Paid by: <b>${paidByName}</b>\n`;
-  response += `📐 ${splitLabel}`;
-  if (split === "half") response += ` (฿${halfAmount.toLocaleString()} each)`;
-  response += `\n\n${balanceStr}`;
+  let msg = `✅ <b>Logged!</b>\n\n`;
+  msg += `${emoji} <b>${category.charAt(0).toUpperCase() + category.slice(1)}</b>`;
+  if (note) msg += ` — ${note}`;
+  msg += `\n💵 <b>฿${amount.toLocaleString()}</b>\n`;
+  msg += `👤 Paid by: <b>${paidByName}</b>\n`;
+  msg += `📐 ${splitLabel}`;
+  if (split === "half") msg += ` (฿${halfAmt.toLocaleString()} each)`;
+  msg += `\n\n${balStr}`;
 
-  await send(chatId, response);
+  await send(chatId, msg);
+  await notifyPartner(pair, from.id,
+    `📥 <b>${userName(from)}</b> logged:\n` +
+    `${emoji} ${note || category} · <b>฿${amount.toLocaleString()}</b>\n` +
+    `${balStr}`
+  );
 }
 
-async function findPartner(chatId: number, myUid: number): Promise<{ uid: number; name: string } | null> {
-  // Look for the other person in past expenses
-  const { data } = await supabase
-    .from("expenses")
-    .select("paid_by_uid, paid_by_name")
-    .eq("chat_id", chatId)
-    .neq("paid_by_uid", myUid)
-    .neq("paid_by_uid", 0)
-    .limit(1);
-
-  if (data && data.length > 0) {
-    return { uid: data[0].paid_by_uid, name: data[0].paid_by_name };
-  }
-  return null;
-}
-
-async function handleEditLast(chatId: number, from: any, parsed: any) {
+async function handleEditLast(chatId: number, from: any, pair: any, parsed: any) {
   const { data } = await supabase
     .from("expenses")
     .select("*")
-    .eq("chat_id", chatId)
+    .eq("pair_id", pair.id)
     .order("created_at", { ascending: false })
     .limit(1);
 
@@ -328,22 +425,22 @@ async function handleEditLast(chatId: number, from: any, parsed: any) {
   }
 
   await supabase.from("expenses").update(updates).eq("id", last.id);
-
   const updated = { ...last, ...updates };
   const emoji = CAT_EMOJI[updated.category] || "📦";
 
-  await send(chatId,
-    `✏️ <b>Updated!</b>\n\n` +
+  const msg = `✏️ <b>Updated!</b>\n\n` +
     `${emoji} ${updated.category} — ${updated.note || ""}\n` +
-    `💵 ฿${Number(updated.amount).toLocaleString()} · Paid by ${updated.paid_by_name}`
-  );
+    `💵 ฿${Number(updated.amount).toLocaleString()} · ${updated.paid_by_name}`;
+
+  await send(chatId, msg);
+  await notifyPartner(pair, from.id, `✏️ <b>${userName(from)}</b> edited last expense:\n${emoji} ${updated.note || updated.category} · ฿${Number(updated.amount).toLocaleString()}`);
 }
 
-async function handleDeleteLast(chatId: number) {
+async function handleDeleteLast(chatId: number, from: any, pair: any) {
   const { data } = await supabase
     .from("expenses")
     .select("*")
-    .eq("chat_id", chatId)
+    .eq("pair_id", pair.id)
     .order("created_at", { ascending: false })
     .limit(1);
 
@@ -354,97 +451,72 @@ async function handleDeleteLast(chatId: number) {
 
   const last = data[0];
   await supabase.from("expenses").delete().eq("id", last.id);
-
   const emoji = CAT_EMOJI[last.category] || "📦";
-  await send(chatId,
-    `🗑 <b>Deleted!</b>\n\n` +
-    `${emoji} ${last.category} — ${last.note || ""}\n` +
-    `💵 ฿${Number(last.amount).toLocaleString()}`
-  );
+
+  const msg = `🗑 <b>Deleted!</b>\n${emoji} ${last.note || last.category} · ฿${Number(last.amount).toLocaleString()}`;
+  await send(chatId, msg);
+  await notifyPartner(pair, from.id, `🗑 <b>${userName(from)}</b> deleted:\n${emoji} ${last.note || last.category} · ฿${Number(last.amount).toLocaleString()}`);
 }
 
-async function handleSettle(chatId: number, from: any, parsed: any) {
-  const { users, netByUser } = await getBalance(chatId);
+async function handleSettle(chatId: number, from: any, pair: any, parsed: any) {
+  const { owesAmount, debtorUid, creditorUid } = await getBalance(pair.id, pair);
 
-  if (users.size < 2) {
-    await send(chatId, "❌ Need at least 2 people logging expenses first.");
-    return;
-  }
-
-  const entries = [...netByUser.entries()];
-  const debtor = entries.find(([, v]) => v > 0.5);
-
-  if (!debtor) {
+  if (owesAmount < 1) {
     await send(chatId, "✅ Already settled! No one owes anything.");
     return;
   }
 
-  const [debtorUid, currentDebt] = debtor;
-  const creditorEntry = entries.find(([uid]) => uid !== debtorUid);
-  if (!creditorEntry) return;
-
-  const [creditorUid] = creditorEntry;
-  const debtorName = users.get(debtorUid) || "?";
-  const creditorName = users.get(creditorUid) || "?";
-
-  // Determine settlement amount
-  let settleAmount = Math.abs(currentDebt);
+  let settleAmt = owesAmount;
   if (parsed.amount && Number(parsed.amount) > 0) {
-    settleAmount = Number(parsed.amount);
+    settleAmt = Number(parsed.amount);
   }
 
-  // Determine direction
-  let fromUid = debtorUid, fromName = debtorName;
-  let toUid = creditorUid, toName = creditorName;
+  // Determine direction: debtor pays creditor
+  let fromUid = debtorUid, toUid = creditorUid;
 
+  // But user might specify direction explicitly
   if (parsed.direction === "sender_to_partner") {
     fromUid = from.id;
-    fromName = userName(from);
-    const partner = await findPartner(chatId, from.id);
-    if (partner) { toUid = partner.uid; toName = partner.name; }
+    toUid = partnerUid(pair, from.id);
   } else if (parsed.direction === "partner_to_sender") {
+    fromUid = partnerUid(pair, from.id);
     toUid = from.id;
-    toName = userName(from);
-    const partner = await findPartner(chatId, from.id);
-    if (partner) { fromUid = partner.uid; fromName = partner.name; }
   }
 
   await supabase.from("settlements").insert({
     chat_id: chatId,
-    amount: settleAmount,
+    pair_id: pair.id,
+    amount: settleAmt,
     from_uid: fromUid,
-    from_name: fromName,
+    from_name: nameForUid(pair, fromUid),
     to_uid: toUid,
-    to_name: toName,
-    note: parsed.note || null,
+    to_name: nameForUid(pair, toUid),
   });
 
-  // Recalculate
-  const newBal = await getBalance(chatId);
-  const newBalStr = formatBalance(newBal.users, newBal.netByUser);
+  const newBal = await getBalance(pair.id, pair);
+  const newBalStr = formatBal(newBal.owesAmount, newBal.debtorUid, pair);
 
-  await send(chatId,
-    `💸 <b>Settlement recorded!</b>\n\n` +
-    `${fromName} → ${toName}\n` +
-    `💵 <b>฿${settleAmount.toLocaleString()}</b>\n\n` +
-    newBalStr
-  );
+  const msg = `💸 <b>Settlement!</b>\n\n` +
+    `${nameForUid(pair, fromUid)} → ${nameForUid(pair, toUid)}\n` +
+    `💵 <b>฿${Math.round(settleAmt).toLocaleString()}</b>\n\n${newBalStr}`;
+
+  await send(chatId, msg);
+  await notifyPartner(pair, from.id, msg);
 }
 
-async function handleBalance(chatId: number) {
-  const { users, netByUser } = await getBalance(chatId);
-  await send(chatId, formatBalance(users, netByUser));
+async function handleBalance(chatId: number, pair: any) {
+  const { owesAmount, debtorUid } = await getBalance(pair.id, pair);
+  await send(chatId, formatBal(owesAmount, debtorUid, pair));
 }
 
-async function handleSummary(chatId: number) {
-  // Current month
+async function handleSummary(chatId: number, pair: any) {
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
   const { data } = await supabase
     .from("expenses")
     .select("*")
-    .eq("chat_id", chatId)
+    .eq("pair_id", pair.id)
     .gte("logged_at", startOfMonth)
     .order("logged_at", { ascending: false });
 
@@ -453,7 +525,6 @@ async function handleSummary(chatId: number) {
     return;
   }
 
-  // Group by category
   const byCategory = new Map<string, number>();
   let total = 0;
   for (const e of data) {
@@ -462,34 +533,31 @@ async function handleSummary(chatId: number) {
     byCategory.set(e.category, (byCategory.get(e.category) || 0) + amt);
   }
 
-  // Sort by amount desc
   const sorted = [...byCategory.entries()].sort((a, b) => b[1] - a[1]);
-
   const monthName = now.toLocaleString("en-US", { month: "long", year: "numeric" });
 
-  let msg = `📊 <b>${monthName} Summary</b>\n`;
-  msg += `━━━━━━━━━━━━━━━━━━\n`;
+  let msg = `📊 <b>${monthName}</b>\n`;
+  msg += `━━━━━━━━━━━━━━━━\n`;
   msg += `Total: <b>฿${total.toLocaleString()}</b> · ${data.length} expenses\n\n`;
 
   for (const [cat, amt] of sorted) {
     const emoji = CAT_EMOJI[cat] || "📦";
-    const pctOfTotal = ((amt / total) * 100).toFixed(0);
-    const bar = "█".repeat(Math.max(1, Math.round(Number(pctOfTotal) / 5)));
-    msg += `${emoji} <b>${cat}</b>  ฿${amt.toLocaleString()}  ${pctOfTotal}%\n${bar}\n`;
+    const p = ((amt / total) * 100).toFixed(0);
+    const bar = "█".repeat(Math.max(1, Math.round(Number(p) / 5)));
+    msg += `${emoji} <b>${cat}</b>  ฿${amt.toLocaleString()}  ${p}%\n${bar}\n`;
   }
 
-  // Balance
-  const { users, netByUser } = await getBalance(chatId);
-  msg += `\n${formatBalance(users, netByUser)}`;
+  const { owesAmount, debtorUid } = await getBalance(pair.id, pair);
+  msg += `\n${formatBal(owesAmount, debtorUid, pair)}`;
 
   await send(chatId, msg);
 }
 
-async function handleHistory(chatId: number) {
+async function handleHistory(chatId: number, pair: any) {
   const { data } = await supabase
     .from("expenses")
     .select("*")
-    .eq("chat_id", chatId)
+    .eq("pair_id", pair.id)
     .order("logged_at", { ascending: false })
     .limit(10);
 
@@ -498,15 +566,14 @@ async function handleHistory(chatId: number) {
     return;
   }
 
-  let msg = `📋 <b>Recent Expenses</b>\n━━━━━━━━━━━━━━━━━━\n\n`;
-
+  let msg = `📋 <b>Recent Expenses</b>\n━━━━━━━━━━━━━━━━\n\n`;
   for (const e of data) {
     const emoji = CAT_EMOJI[e.category] || "📦";
     const date = new Date(e.logged_at).toLocaleDateString("en-GB", {
       day: "2-digit", month: "short", timeZone: "Asia/Bangkok",
     });
-    const splitTag = e.split_type === "full" ? " 🎁" : "";
-    msg += `${date}  ${emoji} ${e.note || e.category}  <b>฿${Number(e.amount).toLocaleString()}</b>  ${e.paid_by_name}${splitTag}\n`;
+    const tag = e.split_type === "full" ? " 🎁" : "";
+    msg += `${date}  ${emoji} ${e.note || e.category}  <b>฿${Number(e.amount).toLocaleString()}</b>  ${e.paid_by_name}${tag}\n`;
   }
 
   await send(chatId, msg);
@@ -514,26 +581,25 @@ async function handleHistory(chatId: number) {
 
 async function handleHelp(chatId: number) {
   await send(chatId,
-    `❓ <b>How to use Navis Expense Bot</b>\n\n` +
-    `<b>💬 Just type naturally:</b>\n` +
+    `❓ <b>Navis Expense Bot</b>\n\n` +
+    `<b>🔗 Setup:</b>\n` +
+    `/pair — get a code to link with partner\n` +
+    `/pair CODE — join your partner\n\n` +
+    `<b>💬 Log expenses (just type!):</b>\n` +
     `• "ข้าวผัด 120" or "lunch 350"\n` +
     `• "grab taxi 89 แฟนจ่าย"\n` +
-    `• "ค่าไฟ 1500" or "electricity 1500"\n\n` +
-    `<b>📐 Split rules:</b>\n` +
-    `• Default: split 50/50\n` +
-    `• Say "เลี้ยง" or "my treat" → no split\n\n` +
+    `• "เลี้ยง dinner 500" (no split)\n\n` +
     `<b>✏️ Fix mistakes:</b>\n` +
     `• "แก้เป็น 250" or "change to 250"\n` +
     `• "ลบอันล่าสุด" or "delete that"\n\n` +
-    `<b>💸 Settle debts:</b>\n` +
-    `• "แฟนโอนมา 500" or "gf sent 500"\n` +
-    `• "เคลียร์แล้ว" or "settled all"\n\n` +
+    `<b>💸 Settle:</b>\n` +
+    `• "แฟนโอนมา 500" or "gf sent 500"\n\n` +
     `<b>🔘 Quick buttons above keyboard!</b>`
   );
 }
 
-// ── Quick-button text mapping ───────────────────────────────────────────────
-function mapButtonText(text: string): string | null {
+// ── Button text mapping ─────────────────────────────────────────────────────
+function mapButton(text: string): string | null {
   const t = text.trim();
   if (t === "💰 Balance") return "/balance";
   if (t === "📊 Summary") return "/summary";
@@ -547,86 +613,74 @@ function mapButtonText(text: string): string | null {
 // ── Main Handler ────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
-  if (req.method !== "POST") {
-    return new Response("OK", { status: 200 });
-  }
+  if (req.method !== "POST") return new Response("OK", { status: 200 });
 
   try {
     const update = await req.json();
     const message = update?.message;
-    if (!message?.text || !message?.chat?.id) {
-      return new Response("OK", { status: 200 });
-    }
+    if (!message?.text || !message?.chat?.id) return new Response("OK");
 
     const chatId = message.chat.id;
     const from = message.from;
     let text = message.text.trim();
 
-    // Map button presses to commands
-    const mapped = mapButtonText(text);
+    // Map keyboard button presses
+    const mapped = mapButton(text);
     if (mapped) text = mapped;
 
-    // Handle slash commands
+    // ── Commands that don't need pairing ──
     if (text === "/start" || text === "/help") {
       await handleHelp(chatId);
       return new Response("OK");
     }
-    if (text === "/balance") {
-      await handleBalance(chatId);
+    if (text.startsWith("/pair") || text.startsWith("NAVIS-")) {
+      const args = text.replace(/^\/pair\s*/i, "").trim();
+      await handlePair(chatId, from, args || (text.startsWith("NAVIS-") ? text : ""));
       return new Response("OK");
     }
-    if (text === "/summary") {
-      await handleSummary(chatId);
-      return new Response("OK");
-    }
-    if (text === "/history") {
-      await handleHistory(chatId);
-      return new Response("OK");
-    }
-    if (text === "/undo") {
-      await handleDeleteLast(chatId);
-      return new Response("OK");
-    }
-    if (text === "/settle") {
-      // Full settle via command
-      await handleSettle(chatId, from, { amount: null, direction: "auto" });
+    if (text === "/unpair") {
+      await handleUnpair(chatId, from);
       return new Response("OK");
     }
 
-    // ── AI Parse natural language ──
+    // ── Everything below requires pairing ──
+    const pair = await requirePair(chatId, from.id);
+    if (!pair) return new Response("OK");
+
+    // Update chat_id if it changed (user reinstalled, etc.)
+    if (pair.user1_uid === from.id && pair.user1_chat_id !== chatId) {
+      await supabase.from("pairs").update({ user1_chat_id: chatId }).eq("id", pair.id);
+      pair.user1_chat_id = chatId;
+    } else if (pair.user2_uid === from.id && pair.user2_chat_id !== chatId) {
+      await supabase.from("pairs").update({ user2_chat_id: chatId }).eq("id", pair.id);
+      pair.user2_chat_id = chatId;
+    }
+
+    // ── Slash commands ──
+    if (text === "/balance") { await handleBalance(chatId, pair); return new Response("OK"); }
+    if (text === "/summary") { await handleSummary(chatId, pair); return new Response("OK"); }
+    if (text === "/history") { await handleHistory(chatId, pair); return new Response("OK"); }
+    if (text === "/undo") { await handleDeleteLast(chatId, from, pair); return new Response("OK"); }
+    if (text === "/settle") { await handleSettle(chatId, from, pair, { amount: null }); return new Response("OK"); }
+
+    // ── Natural language via AI ──
     const parsed = await parseWithAI(text);
     parsed._raw = text;
 
     switch (parsed.intent) {
-      case "log_expense":
-        await handleLogExpense(chatId, from, parsed);
-        break;
-      case "edit_last":
-        await handleEditLast(chatId, from, parsed);
-        break;
-      case "delete_last":
-        await handleDeleteLast(chatId);
-        break;
-      case "settle":
-        await handleSettle(chatId, from, parsed);
-        break;
-      case "check_balance":
-        await handleBalance(chatId);
-        break;
-      case "summary":
-        await handleSummary(chatId);
-        break;
-      case "history":
-        await handleHistory(chatId);
-        break;
-      case "help":
-        await handleHelp(chatId);
-        break;
+      case "log_expense": await handleLogExpense(chatId, from, pair, parsed); break;
+      case "edit_last": await handleEditLast(chatId, from, pair, parsed); break;
+      case "delete_last": await handleDeleteLast(chatId, from, pair); break;
+      case "settle": await handleSettle(chatId, from, pair, parsed); break;
+      case "check_balance": await handleBalance(chatId, pair); break;
+      case "summary": await handleSummary(chatId, pair); break;
+      case "history": await handleHistory(chatId, pair); break;
+      case "help": await handleHelp(chatId); break;
       default:
         await send(chatId,
           "🤔 ไม่เข้าใจ / I didn't understand.\n" +
           "Try: \"lunch 350\" or \"ข้าวผัด 120\"\n" +
-          "Tap ❓ Help for more examples."
+          "Tap ❓ Help for examples."
         );
     }
   } catch (err) {
