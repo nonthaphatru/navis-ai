@@ -1,7 +1,7 @@
 // ============================================
 // Navis AI — Event Alerts
 // ============================================
-// Separate from the 30-min news digest. This ONLY pings you when something
+// Separate from the hourly news digest. This ONLY pings you when something
 // actionable happens:
 //   • PRICE MOVES   — a holding/watchlist ticker moves past a % threshold
 //   • SEC FILINGS   — a new 8-K / 10-Q / 10-K / Form 4 for your holdings
@@ -39,11 +39,11 @@ const SEC_USER_AGENT = `NavisAI/1.0 (${SEC_CONTACT_EMAIL})`;
 // (managed in the web UI). Used as-is when those tables are empty.
 
 // Your actual holdings — smaller move threshold + SEC monitoring.
-const DEFAULT_HOLDINGS = ["SOFI", "PLTR"];
+const DEFAULT_HOLDINGS = ["SOFI"];
 
 // Broader watchlist — only alerted on bigger moves.
 const DEFAULT_WATCHLIST = [
-  "NVDA", "GOOGL", "TSLA", "AAPL", "MSFT", "META", "AMZN", "AMD", "AVGO", "CRM",
+  "PLTR", "NVDA", "GOOGL", "TSLA", "AAPL", "MSFT", "META", "AMZN", "AMD", "AVGO", "CRM",
   "HOOD", "ZS", "SOUN", "AI", "BBAI", "IONQ",
 ];
 

@@ -4,8 +4,8 @@ import { CRYPTO_OPTIONS } from "../lib/cryptoList";
 import type { WatchlistRow, AssetType } from "../types";
 
 const DEFAULT_SEED = {
-  holdings: ["SOFI", "PLTR"],
-  watch: ["NVDA", "GOOGL", "TSLA", "AAPL", "MSFT", "META", "AMZN", "AMD", "AVGO", "CRM", "HOOD", "ZS", "SOUN", "AI", "BBAI", "IONQ"],
+  holdings: ["SOFI"],
+  watch: ["PLTR", "NVDA", "GOOGL", "TSLA", "AAPL", "MSFT", "META", "AMZN", "AMD", "AVGO", "CRM", "HOOD", "ZS", "SOUN", "AI", "BBAI", "IONQ"],
   crypto: [{ symbol: "BTC", id: "bitcoin" }, { symbol: "ETH", id: "ethereum" }],
 };
 

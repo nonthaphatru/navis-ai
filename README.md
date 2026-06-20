@@ -1,6 +1,6 @@
 # 📈 US Stock & Trump News Analysis Pipeline
 
-Automated pipeline that analyzes US stock market + Trump-related news every 30 minutes and sends concise AI summaries to your iPhone and Apple Watch — **completely free**.
+Automated pipeline that analyzes US stock market + Trump-related news every hour and sends concise AI summaries to your iPhone and Apple Watch — **completely free**.
 
 ## Stack
 
@@ -76,7 +76,7 @@ curl -X POST https://YOUR_PROJECT_REF.supabase.co/functions/v1/analyze-stocks \
 
 You should receive a notification on your iPhone within seconds! ✅
 
-### Step 8: Set up the 30-minute schedule
+### Step 8: Set up the hourly schedule
 
 Go to **Dashboard → SQL Editor** and run the contents of:
 - `supabase/migrations/002_setup_cron.sql`
@@ -85,7 +85,7 @@ Go to **Dashboard → SQL Editor** and run the contents of:
 
 ## What You'll Get
 
-Every 30 minutes, a notification like this appears on your iPhone + Apple Watch:
+Every hour, a notification like this appears on your iPhone + Apple Watch:
 
 ```
 📈 Stock Analysis (12 articles)
@@ -113,11 +113,11 @@ faces headwinds from weaker consumer demand.
 
 ## Event Alerts (price moves, SEC filings, earnings)
 
-Separate from the 30-minute news digest, the `alerts` function pings you **only
+Separate from the hourly news digest, the `alerts` function pings you **only
 when something actionable happens** — so it's signal, not noise:
 
-- **📉 Price moves** — a holding (SOFI/PLTR) moves ≥4% intraday, or a watchlist
-  name moves ≥7%. (Thresholds are editable at the top of `alerts/index.ts`.)
+- **📉 Price moves** — a holding (SOFI) moves ≥4% intraday, or a watchlist
+  name (e.g. PLTR) moves ≥7%. (Thresholds are editable at the top of `alerts/index.ts`.)
 - **🏛️ SEC filings** — a new 8-K / 10-Q / 10-K / Form 4 is filed for your
   holdings (via the free SEC EDGAR API — no key needed).
 - **📅 Earnings** — a reminder when a watched ticker reports in the next 2 days.

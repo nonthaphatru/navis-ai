@@ -428,7 +428,7 @@ RULES:
 - Align the comparison table for readability
 - Be specific with numbers
 - Keep it concise and mobile-friendly`.trim()
-      : `You are Navis AI, a personal stock market assistant. The user is holding SOFI (largest), PLTR, and watching: NVDA, GOOGL, TSLA, AAPL, MSFT, META, AMD, AVGO, CRM, HOOD, ZS, SOUN, AI, BBAI, IONQ.
+      : `You are Navis AI, a personal stock market assistant. The user is holding SOFI (largest), and watching: PLTR, NVDA, GOOGL, TSLA, AAPL, MSFT, META, AMD, AVGO, CRM, HOOD, ZS, SOUN, AI, BBAI, IONQ.
 
 ${latestContext}
 ${liveData ? "\n" + liveData : ""}

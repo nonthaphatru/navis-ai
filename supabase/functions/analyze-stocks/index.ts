@@ -29,14 +29,14 @@ const TRIGGER_SECRET = Deno.env.get("TRIGGER_SECRET") ?? "";
 // nothing breaks before the user seeds their watchlist.
 
 // 🔴 TOP PRIORITY — Largest positions
-const DEFAULT_PRIORITY_TICKERS = ["SOFI", "PLTR"];
+const DEFAULT_PRIORITY_TICKERS = ["SOFI"];
 
 // Core watchlist — fetched via Finnhub company news (rotated each run)
 const DEFAULT_WATCHED_TICKERS = [
   // Priority holdings (always fetched first)
-  "SOFI", "PLTR",
+  "SOFI",
   // AI & Tech majors
-  "NVDA", "GOOGL", "TSLA", "AAPL", "MSFT", "META", "AMZN", "AMD", "AVGO", "CRM",
+  "NVDA", "PLTR", "GOOGL", "TSLA", "AAPL", "MSFT", "META", "AMZN", "AMD", "AVGO", "CRM",
   // Fintech
   "HOOD",
   // Cybersecurity
@@ -99,7 +99,7 @@ const RSS_QUERIES = [
   { query: "gold price XAU precious metals", category: "commodity" },
   // Priority stock-specific
   { query: "SoFi Technologies stock", category: "priority" },
-  { query: "Palantir PLTR stock", category: "priority" },
+  { query: "Palantir PLTR stock", category: "company" },
   { query: "Robinhood HOOD stock fintech", category: "company" },
 ];
 
@@ -168,7 +168,7 @@ async function fetchFinnhubGeneralNews(): Promise<NewsArticle[]> {
 
 /**
  * Fetch company-specific news from Finnhub for watched tickers.
- * Priority tickers (SOFI, HOOD) are ALWAYS fetched.
+ * Priority tickers (SOFI) are ALWAYS fetched.
  * Remaining tickers rotate each run to stay within rate limits.
  */
 async function fetchFinnhubCompanyNews(): Promise<NewsArticle[]> {
@@ -179,8 +179,8 @@ async function fetchFinnhubCompanyNews(): Promise<NewsArticle[]> {
   // Always fetch priority tickers first
   const otherTickers = WATCHED_TICKERS.filter((t) => !PRIORITY_TICKERS.includes(t));
 
-  // Rotate through other tickers — pick 4 based on current 30-min slot
-  const slotIndex = Math.floor(Date.now() / (30 * 60 * 1000)) % otherTickers.length;
+  // Rotate through other tickers — pick 4 based on current hourly slot
+  const slotIndex = Math.floor(Date.now() / (60 * 60 * 1000)) % otherTickers.length;
   const rotatedOthers: string[] = [];
   for (let i = 0; i < 4 && i < otherTickers.length; i++) {
     rotatedOthers.push(otherTickers[(slotIndex + i) % otherTickers.length]);
@@ -563,7 +563,7 @@ FORMAT (follow this EXACT order):
 
 📈 STOCK BREAKDOWN
 • SOFI: [detail] ⭐
-• PLTR: [detail] ⭐
+• PLTR: [detail]
 • NVDA: [detail]
 • TSLA: [detail]
 • AAPL: [detail]
@@ -587,13 +587,13 @@ PRIORITY: [HIGH/NORMAL]
 
 RULES:
 - HEADLINE section is THE most important part — it must be readable standalone on a tiny screen
-- SOFI and PLTR get ⭐ (my holdings) marker
+- SOFI gets ⭐ (my holding) marker
 - Use specific numbers (%, $) when available
 - Keep TOTAL response under 500 words
 - Don't invent news for stocks with no articles
 - Current time: ${new Date().toUTCString()}
 
-${ priorityArticles.length > 0 ? "\nPRIORITY ARTICLES (SOFI/PLTR):\n" + priorityArticles.map((a, i) => `[P${i+1}] ${a.title} (${a.source})`).join("\n") + "\n" : ""}
+${ priorityArticles.length > 0 ? "\nPRIORITY ARTICLES (SOFI):\n" + priorityArticles.map((a, i) => `[P${i+1}] ${a.title} (${a.source})`).join("\n") + "\n" : ""}
 ALL ARTICLES:
 ${articleText}`;
 

@@ -12,11 +12,18 @@
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 CREATE EXTENSION IF NOT EXISTS pg_net;
 
--- 2. Schedule the stock analysis every 30 minutes
--- Runs at :00 and :30 of every hour
+-- 2. Schedule the stock analysis every hour
+-- Runs at :00 of every hour.
+-- (Drop the old 30-min job first if this migration was run before, so we don't
+--  leave a duplicate firing on the half-hour.)
+DO $cleanup$ BEGIN
+  PERFORM cron.unschedule('analyze-stocks-every-30min');
+EXCEPTION WHEN OTHERS THEN NULL;
+END $cleanup$;
+
 SELECT cron.schedule(
-  'analyze-stocks-every-30min',
-  '*/30 * * * *',
+  'analyze-stocks-hourly',
+  '0 * * * *',
   $$
   SELECT net.http_post(
     url := 'https://<YOUR_PROJECT_REF>.supabase.co/functions/v1/analyze-stocks',
@@ -48,7 +55,7 @@ SELECT cron.schedule(
 --   SELECT * FROM cron.job_run_details ORDER BY start_time DESC LIMIT 20;
 --
 -- Unschedule a job:
---   SELECT cron.unschedule('analyze-stocks-every-30min');
+--   SELECT cron.unschedule('analyze-stocks-hourly');
 --
 -- Manually trigger the edge function (for testing):
 --   SELECT net.http_post(
