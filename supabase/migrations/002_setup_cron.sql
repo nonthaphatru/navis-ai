@@ -12,8 +12,9 @@
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 CREATE EXTENSION IF NOT EXISTS pg_net;
 
--- 2. Schedule the stock analysis every hour
--- Runs at :00 of every hour.
+-- 2. Schedule the stock analysis hourly during active hours.
+-- Runs at :00 of each hour, UTC 03:00–16:00 (≈ 10:00–23:00 Asia/Bangkok) so it
+-- doesn't ping overnight.
 -- (Drop the old 30-min job first if this migration was run before, so we don't
 --  leave a duplicate firing on the half-hour.)
 DO $cleanup$ BEGIN
@@ -23,7 +24,7 @@ END $cleanup$;
 
 SELECT cron.schedule(
   'analyze-stocks-hourly',
-  '0 * * * *',
+  '0 3-16 * * *',
   $$
   SELECT net.http_post(
     url := 'https://<YOUR_PROJECT_REF>.supabase.co/functions/v1/analyze-stocks',

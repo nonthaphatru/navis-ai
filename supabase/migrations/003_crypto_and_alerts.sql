@@ -94,16 +94,11 @@ $$;
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 CREATE EXTENSION IF NOT EXISTS pg_net;
 
--- Crypto analysis -- hourly at :30, interleaved with the stock job (which runs at :00).
--- (Drop the old 30-min job first if this migration was run before.)
-DO $cleanup$ BEGIN
-  PERFORM cron.unschedule('analyze-crypto-every-30min');
-EXCEPTION WHEN OTHERS THEN NULL;
-END $cleanup$;
-
+-- Crypto analysis -- every 2 hours during active hours (UTC 03:00–15:00).
+-- (Crypto stays 2-hourly; only the stock digest moved from 30-min to hourly.)
 SELECT cron.schedule(
-  'analyze-crypto-hourly',
-  '30 * * * *',
+  'analyze-crypto-every-2h',
+  '0 3,5,7,9,11,13,15 * * *',
   $$
   SELECT net.http_post(
     url := 'https://<YOUR_PROJECT_REF>.supabase.co/functions/v1/analyze-crypto',
