@@ -20,3 +20,5 @@ Thumbs.db
 
 # Gemini / AI
 .gemini/
+
+.claude/settings.local.json
