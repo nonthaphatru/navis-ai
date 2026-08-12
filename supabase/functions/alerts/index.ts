@@ -7,7 +7,8 @@
 //   • SEC FILINGS   — a new 8-K / 10-Q / 10-K / Form 4 for your holdings
 //   • EARNINGS      — an upcoming earnings report for a watched ticker
 // Plus a `?mode=heartbeat` health check (run daily) that confirms the
-// stock + crypto pipelines are still firing.
+// stock pipeline is still firing, and a `?mode=earnings-week` digest
+// (run Monday morning) listing which top stocks report earnings this week.
 //
 // All free: reuses the Finnhub key; SEC EDGAR needs no key.
 // ============================================
@@ -38,17 +39,21 @@ const SEC_USER_AGENT = `NavisAI/1.0 (${SEC_CONTACT_EMAIL})`;
 // DEFAULTS — overwritten at runtime from the `watchlist` / `app_settings` tables
 // (managed in the web UI). Used as-is when those tables are empty.
 
-// Your actual holdings — smaller move threshold + SEC monitoring.
-const DEFAULT_HOLDINGS = ["SOFI"];
+// Actual holdings — smaller move threshold + SEC monitoring (incl. Form 4).
+const DEFAULT_HOLDINGS: string[] = [];
+
+// AI sector focus group — smaller move threshold + ⭐ marker.
+const DEFAULT_FOCUS = ["NVDA", "MSFT", "GOOGL", "META", "AMD", "AVGO", "PLTR"];
 
 // Broader watchlist — only alerted on bigger moves.
 const DEFAULT_WATCHLIST = [
-  "PLTR", "NVDA", "GOOGL", "TSLA", "AAPL", "MSFT", "META", "AMZN", "AMD", "AVGO", "CRM",
-  "HOOD", "ZS", "SOUN", "AI", "BBAI", "IONQ",
+  "TSLA", "AAPL", "AMZN", "CRM",
+  "SOFI", "HOOD", "ZS", "SOUN", "AI", "BBAI", "IONQ",
 ];
 
 // Mutable — populated by loadConfig() at the start of each run.
 let HOLDINGS: string[] = [...DEFAULT_HOLDINGS];
+let FOCUS: string[] = [...DEFAULT_FOCUS];
 let WATCHLIST: string[] = [...DEFAULT_WATCHLIST];
 
 // ── Thresholds (defaults; overridden by app_settings) ───────────────────────────
@@ -59,22 +64,30 @@ let SEC_ALERTS_ENABLED = true;
 let EARNINGS_ALERTS_ENABLED = true;
 
 /**
- * Load holdings/watchlist from `watchlist` and thresholds/toggles from
+ * Load holdings/focus/watchlist from `watchlist` and thresholds/toggles from
  * `app_settings`. Falls back to the hardcoded defaults when tables are empty.
  */
 async function loadConfig(supabase: any): Promise<void> {
   try {
     const { data: wl } = await supabase
       .from("watchlist")
-      .select("symbol, is_holding")
+      .select("symbol, is_holding, priority")
       .eq("asset_type", "stock")
       .order("sort_order", { ascending: true });
     if (wl && wl.length > 0) {
-      const syms = wl.map((r: any) => ({ s: String(r.symbol).toUpperCase(), h: !!r.is_holding }));
-      HOLDINGS = syms.filter((x) => x.h).map((x) => x.s);
-      WATCHLIST = syms.filter((x) => !x.h).map((x) => x.s);
-      if (HOLDINGS.length === 0) { HOLDINGS = WATCHLIST.slice(0, 2); WATCHLIST = WATCHLIST.slice(2); }
-      console.log(`📋 watchlist: ${HOLDINGS.length} holdings, ${WATCHLIST.length} watch`);
+      const syms = wl.map((r: any) => ({
+        s: String(r.symbol).toUpperCase(),
+        h: !!r.is_holding,
+        p: !!r.priority,
+      }));
+      HOLDINGS = syms.filter((x: any) => x.h).map((x: any) => x.s);
+      FOCUS = syms.filter((x: any) => x.p && !x.h).map((x: any) => x.s);
+      WATCHLIST = syms.filter((x: any) => !x.h && !x.p).map((x: any) => x.s);
+      if (HOLDINGS.length === 0 && FOCUS.length === 0) {
+        FOCUS = WATCHLIST.slice(0, 2);
+        WATCHLIST = WATCHLIST.slice(2);
+      }
+      console.log(`📋 watchlist: ${HOLDINGS.length} holdings, ${FOCUS.length} focus, ${WATCHLIST.length} watch`);
     } else {
       console.log("📋 watchlist empty — using defaults");
     }
@@ -148,6 +161,7 @@ async function checkPriceMoves(supabase: any): Promise<string[]> {
 
   const targets = [
     ...HOLDINGS.map((t) => ({ ticker: t, hold: true })),
+    ...FOCUS.map((t) => ({ ticker: t, hold: true })), // AI focus — same tight threshold
     ...WATCHLIST.map((t) => ({ ticker: t, hold: false })),
   ];
 
@@ -315,7 +329,7 @@ async function checkEarnings(supabase: any): Promise<string[]> {
       return [];
     }
     const data = await res.json();
-    const watch = new Set([...HOLDINGS, ...WATCHLIST]);
+    const watch = new Set([...HOLDINGS, ...FOCUS, ...WATCHLIST]);
     const events = data?.earningsCalendar || [];
 
     for (const e of events) {
@@ -330,7 +344,7 @@ async function checkEarnings(supabase: any): Promise<string[]> {
         .maybeSingle();
       if (sent) continue;
 
-      const hold = HOLDINGS.includes(sym);
+      const hold = HOLDINGS.includes(sym) || FOCUS.includes(sym);
       const when = e.hour === "amc" ? "after close" : e.hour === "bmo" ? "before open" : "";
       const epsEst = e.epsEstimate != null ? ` (EPS est $${e.epsEstimate})` : "";
       lines.push(`• ${sym}${hold ? " ⭐" : ""} reports ${e.date} ${when}${epsEst}`.trimEnd());
@@ -346,12 +360,80 @@ async function checkEarnings(supabase: any): Promise<string[]> {
   return lines;
 }
 
+// ── Weekly earnings digest (`?mode=earnings-week`) ──────────────────────────
+// Runs Monday morning via cron: which top / watched stocks report this week.
+
+// Big names worth knowing about even when they're not on the watchlist.
+const TOP_EARNINGS_TICKERS = [
+  // Megacap tech & AI
+  "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AVGO", "AMD",
+  "INTC", "QCOM", "MU", "TSM", "ORCL", "CRM", "ADBE", "NFLX", "DIS",
+  "PLTR", "SNOW", "SHOP", "UBER", "ABNB",
+  // Fintech & banks
+  "COIN", "HOOD", "SOFI", "PYPL", "JPM", "BAC", "GS", "MS", "WFC", "V", "MA",
+  // Consumer / industrial / energy / health
+  "WMT", "COST", "HD", "MCD", "NKE", "XOM", "CVX", "BA", "CAT", "LLY", "UNH", "JNJ",
+];
+
+async function weeklyEarningsDigest(): Promise<boolean> {
+  if (!FINNHUB_API_KEY) return false;
+  const from = new Date().toISOString().split("T")[0];
+  const to = new Date(Date.now() + 6 * 86400000).toISOString().split("T")[0];
+
+  const res = await fetch(
+    `https://finnhub.io/api/v1/calendar/earnings?from=${from}&to=${to}&token=${FINNHUB_API_KEY}`
+  );
+  if (!res.ok) {
+    console.error(`Finnhub earnings calendar error: ${res.status}`);
+    return false;
+  }
+  const data = await res.json();
+  const events = data?.earningsCalendar || [];
+
+  const wanted = new Set([...HOLDINGS, ...FOCUS, ...WATCHLIST, ...TOP_EARNINGS_TICKERS]);
+  const byDate = new Map<string, string[]>();
+  const seen = new Set<string>();
+
+  for (const e of events) {
+    const sym = String(e.symbol || "").toUpperCase();
+    if (!wanted.has(sym) || !e.date) continue;
+    const key = `${sym}|${e.date}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const parts = [`• ${sym}${HOLDINGS.includes(sym) || FOCUS.includes(sym) ? " ⭐" : ""}`];
+    if (e.hour === "amc") parts.push("after close");
+    else if (e.hour === "bmo") parts.push("before open");
+    if (e.epsEstimate != null) parts.push(`(EPS est $${e.epsEstimate})`);
+
+    if (!byDate.has(e.date)) byDate.set(e.date, []);
+    byDate.get(e.date)!.push(parts.join(" "));
+  }
+
+  const days = [...byDate.keys()].sort();
+  const body =
+    days.length === 0
+      ? "No watched or major-cap earnings scheduled this week."
+      : days
+          .map((d) => {
+            const weekday = new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", {
+              weekday: "long",
+              timeZone: "UTC",
+            });
+            return `${weekday} ${d}\n${byDate.get(d)!.join("\n")}`;
+          })
+          .join("\n\n");
+
+  console.log(`📅 Weekly earnings digest: ${seen.size} reports across ${days.length} days`);
+  return await sendTelegram(`📅 EARNINGS THIS WEEK\n\n${body}`);
+}
+
 // ── Heartbeat ─────────────────────────────────────────────────────────────
 
 async function heartbeat(supabase: any): Promise<void> {
+  // Crypto pipeline disabled (out of crypto positions) — only stocks checked.
   const checks = [
     { table: "analysis_log", label: "📈 Stocks" },
-    { table: "crypto_analysis_log", label: "🪙 Crypto" },
   ];
   const statusLines: string[] = [];
   let problems = 0;
@@ -416,6 +498,12 @@ Deno.serve(async (req: Request) => {
 
     // Load watchlist + thresholds/toggles from the DB (web-UI managed).
     await loadConfig(supabase);
+
+    // Weekly "who reports this week" preview — scheduled Monday morning.
+    if (mode === "earnings-week") {
+      const sent = await weeklyEarningsDigest();
+      return json({ status: "ok", mode, sent });
+    }
 
     // Run the enabled checks independently — one failing source can't kill the rest.
     const [priceR, secR, earnR] = await Promise.allSettled([

@@ -28,17 +28,17 @@ const TRIGGER_SECRET = Deno.env.get("TRIGGER_SECRET") ?? "";
 // (managed from the web UI). If the table is empty, these defaults are used so
 // nothing breaks before the user seeds their watchlist.
 
-// 🔴 TOP PRIORITY — Largest positions
-const DEFAULT_PRIORITY_TICKERS = ["SOFI"];
+// 🔴 TOP PRIORITY — AI sector focus group
+const DEFAULT_PRIORITY_TICKERS = ["NVDA", "MSFT", "GOOGL", "META", "AMD", "AVGO", "PLTR"];
 
 // Core watchlist — fetched via Finnhub company news (rotated each run)
 const DEFAULT_WATCHED_TICKERS = [
-  // Priority holdings (always fetched first)
-  "SOFI",
-  // AI & Tech majors
-  "NVDA", "PLTR", "GOOGL", "TSLA", "AAPL", "MSFT", "META", "AMZN", "AMD", "AVGO", "CRM",
+  // AI focus group (always fetched first)
+  "NVDA", "MSFT", "GOOGL", "META", "AMD", "AVGO", "PLTR",
+  // Tech majors
+  "TSLA", "AAPL", "AMZN", "CRM",
   // Fintech
-  "HOOD",
+  "SOFI", "HOOD",
   // Cybersecurity
   "ZS",
   // AI mid/small caps
@@ -97,9 +97,13 @@ const RSS_QUERIES = [
   { query: "Google Gemini AI deal partnership", category: "ai" },
   // Gold & Commodities
   { query: "gold price XAU precious metals", category: "commodity" },
-  // Priority stock-specific
-  { query: "SoFi Technologies stock", category: "priority" },
-  { query: "Palantir PLTR stock", category: "company" },
+  // Priority — AI sector focus group
+  { query: "Nvidia NVDA stock AI", category: "priority" },
+  { query: "AI stocks Microsoft Google Meta earnings", category: "priority" },
+  { query: "Palantir PLTR stock", category: "priority" },
+  { query: "AMD Broadcom AI chip stock", category: "priority" },
+  // Other watchlist names
+  { query: "SoFi Technologies stock", category: "company" },
   { query: "Robinhood HOOD stock fintech", category: "company" },
 ];
 
@@ -123,7 +127,7 @@ interface NewsArticle {
   publishedAt: string;
   category: string; // "market" | "company" | "trump" | "geopolitics" | "ai" | "priority"
   relatedTicker?: string;
-  isPriority?: boolean; // true for SOFI, HOOD related articles
+  isPriority?: boolean; // true for AI focus group related articles
 }
 
 // ── Helper: Hash a string (for deduplication) ──────────────────────────────────
@@ -168,7 +172,7 @@ async function fetchFinnhubGeneralNews(): Promise<NewsArticle[]> {
 
 /**
  * Fetch company-specific news from Finnhub for watched tickers.
- * Priority tickers (SOFI) are ALWAYS fetched.
+ * Priority tickers (AI focus group) are ALWAYS fetched.
  * Remaining tickers rotate each run to stay within rate limits.
  */
 async function fetchFinnhubCompanyNews(): Promise<NewsArticle[]> {
@@ -539,9 +543,9 @@ async function analyzeWithAI(
   // Separate priority articles for emphasis
   const priorityArticles = articles.filter((a) => a.isPriority || PRIORITY_TICKERS.includes(a.relatedTicker || ""));
 
-  // Build the portfolio/watch line from the live watchlist (DB-driven).
+  // Build the focus/watch line from the live watchlist (DB-driven).
   const watchOnly = WATCHED_TICKERS.filter((t) => !PRIORITY_TICKERS.includes(t));
-  const portfolioLine = `PORTFOLIO: ${PRIORITY_TICKERS.join(", ") || "(none)"} | Watch: ${watchOnly.join(", ") || "(none)"}`;
+  const portfolioLine = `FOCUS (AI sector): ${PRIORITY_TICKERS.join(", ") || "(none)"} | Watch: ${watchOnly.join(", ") || "(none)"}`;
 
   const prompt = `You are a financial news analyst. Analyze ALL these articles and create a mobile-friendly summary optimized for Apple Watch + iPhone.
 
@@ -562,14 +566,14 @@ FORMAT (follow this EXACT order):
 ———————————
 
 📈 STOCK BREAKDOWN
-• SOFI: [detail] ⭐
-• PLTR: [detail]
-• NVDA: [detail]
+• NVDA: [detail] ⭐
+• MSFT: [detail] ⭐
+• GOOGL: [detail] ⭐
+• META: [detail] ⭐
+• AMD: [detail] ⭐
+• AVGO: [detail] ⭐
+• PLTR: [detail] ⭐
 • TSLA: [detail]
-• AAPL: [detail]
-• GOOGL: [detail]
-• HOOD: [detail]
-• ZS: [detail]
 [Add others with news, skip those without]
 
 🥇 GOLD
@@ -587,13 +591,13 @@ PRIORITY: [HIGH/NORMAL]
 
 RULES:
 - HEADLINE section is THE most important part — it must be readable standalone on a tiny screen
-- SOFI gets ⭐ (my holding) marker
+- FOCUS tickers (AI sector) get ⭐ marker and appear first in the breakdown
 - Use specific numbers (%, $) when available
 - Keep TOTAL response under 500 words
 - Don't invent news for stocks with no articles
 - Current time: ${new Date().toUTCString()}
 
-${ priorityArticles.length > 0 ? "\nPRIORITY ARTICLES (SOFI):\n" + priorityArticles.map((a, i) => `[P${i+1}] ${a.title} (${a.source})`).join("\n") + "\n" : ""}
+${ priorityArticles.length > 0 ? "\nPRIORITY ARTICLES (AI FOCUS):\n" + priorityArticles.map((a, i) => `[P${i+1}] ${a.title} (${a.source})`).join("\n") + "\n" : ""}
 ALL ARTICLES:
 ${articleText}`;
 

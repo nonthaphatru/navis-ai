@@ -322,8 +322,8 @@ Deno.serve(async (req: Request) => {
         "🚀 Navis AI Stock Bot\n\n" +
         "Ask me anything about your portfolio or the market!\n\n" +
         "Examples:\n" +
-        "• How's SOFI doing?\n" +
-        "• What's happening with NVDA?\n" +
+        "• How's NVDA doing?\n" +
+        "• What's happening with AMD?\n" +
         "• Summarize today's market\n" +
         "• Should I worry about PLTR?\n" +
         "• What's the latest on Trump tariffs?\n\n" +
@@ -361,7 +361,7 @@ Deno.serve(async (req: Request) => {
     if (userText === "/portfolio") {
       const prompt = `Based on this latest market analysis, give a brief status update on each stock in the portfolio.
 
-Portfolio: SOFI (largest position), PLTR, NVDA, GOOGL, TSLA, AAPL, MSFT, META, AMD, AVGO, CRM, HOOD, ZS, SOUN, AI, BBAI, IONQ
+Portfolio — AI sector focus: NVDA, MSFT, GOOGL, META, AMD, AVGO, PLTR | Watching: TSLA, AAPL, AMZN, CRM, SOFI, HOOD, ZS, SOUN, AI, BBAI, IONQ
 
 For each stock that has info, write one line: ticker + brief status + ↑/↓/→ arrow.
 Skip stocks with no data. Keep it very concise.
@@ -428,7 +428,7 @@ RULES:
 - Align the comparison table for readability
 - Be specific with numbers
 - Keep it concise and mobile-friendly`.trim()
-      : `You are Navis AI, a personal stock market assistant. The user is holding SOFI (largest), and watching: PLTR, NVDA, GOOGL, TSLA, AAPL, MSFT, META, AMD, AVGO, CRM, HOOD, ZS, SOUN, AI, BBAI, IONQ.
+      : `You are Navis AI, a personal stock market assistant. The user's focus group is the AI sector (NVDA, MSFT, GOOGL, META, AMD, AVGO, PLTR), and they also watch: TSLA, AAPL, AMZN, CRM, SOFI, HOOD, ZS, SOUN, AI, BBAI, IONQ.
 
 ${latestContext}
 ${liveData ? "\n" + liveData : ""}
