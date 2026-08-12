@@ -346,7 +346,7 @@ async function checkEarnings(supabase: any): Promise<string[]> {
       if (sent) continue;
 
       const hold = HOLDINGS.includes(sym) || FOCUS.includes(sym);
-      const when = e.hour === "amc" ? "after close" : e.hour === "bmo" ? "before open" : "";
+      const when = e.hour === "amc" ? "🌙" : e.hour === "bmo" ? "☀️" : ""; // 🌙 after close, ☀️ before open
       const epsEst = e.epsEstimate != null ? ` (EPS est $${e.epsEstimate})` : "";
       lines.push(`• ${sym}${hold ? " ⭐" : ""} reports ${e.date} ${when}${epsEst}`.trimEnd());
 
@@ -403,8 +403,8 @@ async function weeklyEarningsDigest(): Promise<boolean> {
 
   const fmtLine = (e: any): string => {
     const parts = [`• ${e.sym}${starred.has(e.sym) ? " ⭐" : ""}`];
-    if (e.hour === "amc") parts.push("after close");
-    else if (e.hour === "bmo") parts.push("before open");
+    if (e.hour === "amc") parts.push("🌙"); // after close
+    else if (e.hour === "bmo") parts.push("☀️"); // before open
     if (e.epsEstimate != null) parts.push(`(EPS est $${e.epsEstimate})`);
     return parts.join(" ");
   };
@@ -438,7 +438,7 @@ async function weeklyEarningsDigest(): Promise<boolean> {
   ].join("\n\n———————————\n\n");
 
   console.log(`📅 Earnings digest: ${totalPicks} reports (${from} → ${to})`);
-  return await sendTelegram(`📅 EARNINGS AHEAD\n\n${body}`);
+  return await sendTelegram(`📅 EARNINGS AHEAD\n☀️ before open · 🌙 after close\n\n${body}`);
 }
 
 // ── Heartbeat ─────────────────────────────────────────────────────────────
