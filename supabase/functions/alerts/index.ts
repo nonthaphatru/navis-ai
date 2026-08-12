@@ -8,7 +8,8 @@
 //   • EARNINGS      — an upcoming earnings report for a watched ticker
 // Plus a `?mode=heartbeat` health check (run daily) that confirms the
 // stock pipeline is still firing, and a `?mode=earnings-week` digest
-// (run Monday morning) listing which top stocks report earnings this week.
+// (run Monday morning) listing the top 5 earnings reporters of each day
+// for this week and next week.
 //
 // All free: reuses the Finnhub key; SEC EDGAR needs no key.
 // ============================================
@@ -361,24 +362,18 @@ async function checkEarnings(supabase: any): Promise<string[]> {
 }
 
 // ── Weekly earnings digest (`?mode=earnings-week`) ──────────────────────────
-// Runs Monday morning via cron: which top / watched stocks report this week.
-
-// Big names worth knowing about even when they're not on the watchlist.
-const TOP_EARNINGS_TICKERS = [
-  // Megacap tech & AI
-  "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AVGO", "AMD",
-  "INTC", "QCOM", "MU", "TSM", "ORCL", "CRM", "ADBE", "NFLX", "DIS",
-  "PLTR", "SNOW", "SHOP", "UBER", "ABNB",
-  // Fintech & banks
-  "COIN", "HOOD", "SOFI", "PYPL", "JPM", "BAC", "GS", "MS", "WFC", "V", "MA",
-  // Consumer / industrial / energy / health
-  "WMT", "COST", "HD", "MCD", "NKE", "XOM", "CVX", "BA", "CAT", "LLY", "UNH", "JNJ",
-];
+// Runs Monday morning via cron: the top 5 reporters of each day (ranked by
+// revenue estimate, i.e. biggest companies first) for this week AND next week,
+// plus any watched names reporting that day.
 
 async function weeklyEarningsDigest(): Promise<boolean> {
   if (!FINNHUB_API_KEY) return false;
-  const from = new Date().toISOString().split("T")[0];
-  const to = new Date(Date.now() + 6 * 86400000).toISOString().split("T")[0];
+  const now = new Date();
+  const from = now.toISOString().split("T")[0];
+  // Through Sunday of NEXT week — the rest of this week + all of next.
+  const daysToSunday = (7 - now.getUTCDay()) % 7;
+  const endOfThisWeek = new Date(now.getTime() + daysToSunday * 86400000).toISOString().split("T")[0];
+  const to = new Date(now.getTime() + (daysToSunday + 7) * 86400000).toISOString().split("T")[0];
 
   const res = await fetch(
     `https://finnhub.io/api/v1/calendar/earnings?from=${from}&to=${to}&token=${FINNHUB_API_KEY}`
@@ -390,42 +385,60 @@ async function weeklyEarningsDigest(): Promise<boolean> {
   const data = await res.json();
   const events = data?.earningsCalendar || [];
 
-  const wanted = new Set([...HOLDINGS, ...FOCUS, ...WATCHLIST, ...TOP_EARNINGS_TICKERS]);
-  const byDate = new Map<string, string[]>();
-  const seen = new Set<string>();
+  const watched = new Set([...HOLDINGS, ...FOCUS, ...WATCHLIST]);
+  const starred = new Set([...HOLDINGS, ...FOCUS]);
 
+  // Bucket by date, dedupe symbols.
+  const byDate = new Map<string, any[]>();
+  const seen = new Set<string>();
   for (const e of events) {
     const sym = String(e.symbol || "").toUpperCase();
-    if (!wanted.has(sym) || !e.date) continue;
+    if (!sym || !e.date) continue;
     const key = `${sym}|${e.date}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    if (!byDate.has(e.date)) byDate.set(e.date, []);
+    byDate.get(e.date)!.push({ ...e, sym });
+  }
 
-    const parts = [`• ${sym}${HOLDINGS.includes(sym) || FOCUS.includes(sym) ? " ⭐" : ""}`];
+  const fmtLine = (e: any): string => {
+    const parts = [`• ${e.sym}${starred.has(e.sym) ? " ⭐" : ""}`];
     if (e.hour === "amc") parts.push("after close");
     else if (e.hour === "bmo") parts.push("before open");
     if (e.epsEstimate != null) parts.push(`(EPS est $${e.epsEstimate})`);
+    return parts.join(" ");
+  };
 
-    if (!byDate.has(e.date)) byDate.set(e.date, []);
-    byDate.get(e.date)!.push(parts.join(" "));
+  const thisWeek: string[] = [];
+  const nextWeek: string[] = [];
+  let totalPicks = 0;
+
+  for (const d of [...byDate.keys()].sort()) {
+    const all = byDate.get(d)!;
+    // Top 5 by revenue estimate (largest companies first, unknowns last)...
+    const top5 = [...all]
+      .sort((a, b) => (b.revenueEstimate ?? -1) - (a.revenueEstimate ?? -1))
+      .slice(0, 5);
+    // ...plus any watched names that day, even outside the top 5.
+    const extras = all.filter((e) => watched.has(e.sym) && !top5.includes(e));
+    const picks = [...top5, ...extras];
+    totalPicks += picks.length;
+
+    const weekday = new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", {
+      weekday: "long",
+      timeZone: "UTC",
+    });
+    const block = `${weekday} ${d}\n${picks.map(fmtLine).join("\n")}`;
+    (d <= endOfThisWeek ? thisWeek : nextWeek).push(block);
   }
 
-  const days = [...byDate.keys()].sort();
-  const body =
-    days.length === 0
-      ? "No watched or major-cap earnings scheduled this week."
-      : days
-          .map((d) => {
-            const weekday = new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", {
-              weekday: "long",
-              timeZone: "UTC",
-            });
-            return `${weekday} ${d}\n${byDate.get(d)!.join("\n")}`;
-          })
-          .join("\n\n");
+  const body = [
+    `▶️ THIS WEEK\n\n${thisWeek.length ? thisWeek.join("\n\n") : "No earnings scheduled."}`,
+    `⏭️ NEXT WEEK\n\n${nextWeek.length ? nextWeek.join("\n\n") : "No earnings scheduled."}`,
+  ].join("\n\n———————————\n\n");
 
-  console.log(`📅 Weekly earnings digest: ${seen.size} reports across ${days.length} days`);
-  return await sendTelegram(`📅 EARNINGS THIS WEEK\n\n${body}`);
+  console.log(`📅 Earnings digest: ${totalPicks} reports (${from} → ${to})`);
+  return await sendTelegram(`📅 EARNINGS AHEAD\n\n${body}`);
 }
 
 // ── Heartbeat ─────────────────────────────────────────────────────────────
